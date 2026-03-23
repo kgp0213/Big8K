@@ -18,6 +18,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Local-only examples / scratch files
+examples/
+
 # Rust / Tauri local lock and debug artifacts
 src-tauri/.cargo-lock
 
