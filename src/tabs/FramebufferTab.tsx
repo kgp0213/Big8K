@@ -32,7 +32,14 @@ interface LocalImageEntry {
   name: string;
   path: string;
   ext: string;
+  width?: number;
+  height?: number;
+  lastModified?: number;
+  previewUrl?: string;
 }
+
+type ImageSortMode = "name" | "mtime";
+type ImageViewMode = "grid" | "list";
 
 const IMAGE_EXTENSIONS = new Set([".bmp", ".png", ".jpg", ".jpeg", ".webp"]);
 
@@ -60,14 +67,49 @@ export default function FramebufferTab() {
   const [selectedFolderPath, setSelectedFolderPath] = useState("");
   const [folderImageEntries, setFolderImageEntries] = useState<LocalImageEntry[]>([]);
   const [imageSearch, setImageSearch] = useState("");
+  const [resolutionFilterEnabled, setResolutionFilterEnabled] = useState(false);
+  const [sortMode, setSortMode] = useState<ImageSortMode>("name");
+  const [viewMode, setViewMode] = useState<ImageViewMode>("grid");
 
   const isConnected = connection.connected && connection.type === "adb";
 
+  const currentResolution = useMemo(() => {
+    const raw = connection.screenResolution?.trim();
+    if (!raw) return null;
+    const normalized = raw.replace(/×/g, "x").replace(/\s+/g, "");
+    const parts = normalized.split("x");
+    if (parts.length !== 2) return null;
+    const width = Number(parts[0]);
+    const height = Number(parts[1]);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    return { width, height, label: `${width} × ${height}` };
+  }, [connection.screenResolution]);
+
   const filteredFolderImages = useMemo(() => {
     const keyword = imageSearch.trim().toLowerCase();
-    if (!keyword) return folderImageEntries;
-    return folderImageEntries.filter((item) => item.name.toLowerCase().includes(keyword));
-  }, [folderImageEntries, imageSearch]);
+
+    let next = folderImageEntries.filter((item) => {
+      if (keyword && !item.name.toLowerCase().includes(keyword)) {
+        return false;
+      }
+      if (resolutionFilterEnabled) {
+        if (!currentResolution || !item.width || !item.height) {
+          return false;
+        }
+        return item.width === currentResolution.width && item.height === currentResolution.height;
+      }
+      return true;
+    });
+
+    next = [...next].sort((a, b) => {
+      if (sortMode === "mtime") {
+        return (b.lastModified || 0) - (a.lastModified || 0) || a.name.localeCompare(b.name, "zh-CN", { numeric: true, sensitivity: "base" });
+      }
+      return a.name.localeCompare(b.name, "zh-CN", { numeric: true, sensitivity: "base" });
+    });
+
+    return next;
+  }, [folderImageEntries, imageSearch, resolutionFilterEnabled, currentResolution, sortMode]);
 
   useEffect(() => {
     if (!isConnected && !disconnectedLogged) {
@@ -78,6 +120,16 @@ export default function FramebufferTab() {
       setDisconnectedLogged(false);
     }
   }, [isConnected, disconnectedLogged, appendLog]);
+
+  useEffect(() => {
+    return () => {
+      folderImageEntries.forEach((item) => {
+        if (item.previewUrl) {
+          URL.revokeObjectURL(item.previewUrl);
+        }
+      });
+    };
+  }, [folderImageEntries]);
 
   const showMessage = (type: "success" | "error", text: string) => {
     appendLog(text, type === "success" ? "success" : "error");
@@ -245,12 +297,25 @@ export default function FramebufferTab() {
     fileInputRef.current?.click();
   };
 
-  const handleImageSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     if (files.length === 0) return;
 
-    const entries = files
-      .map((file, index) => {
+    const readImageSize = (file: File) =>
+      new Promise<{ width?: number; height?: number; previewUrl?: string }>((resolve) => {
+        const previewUrl = URL.createObjectURL(file);
+        const img = new window.Image();
+        img.onload = () => {
+          resolve({ width: img.naturalWidth, height: img.naturalHeight, previewUrl });
+        };
+        img.onerror = () => {
+          resolve({ previewUrl });
+        };
+        img.src = previewUrl;
+      });
+
+    const rawEntries = await Promise.all(
+      files.map(async (file, index): Promise<LocalImageEntry | null> => {
         const rawPath = (file as File & { path?: string; webkitRelativePath?: string }).path;
         const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
         const path = rawPath || relativePath || file.name;
@@ -258,15 +323,23 @@ export default function FramebufferTab() {
         if (!IMAGE_EXTENSIONS.has(ext)) {
           return null;
         }
+
+        const sizeInfo = await readImageSize(file);
+
         return {
           id: `${file.name}-${index}`,
           name: file.name,
           path,
           ext,
-        } satisfies LocalImageEntry;
+          width: sizeInfo.width,
+          height: sizeInfo.height,
+          lastModified: file.lastModified,
+          previewUrl: sizeInfo.previewUrl,
+        };
       })
-      .filter((item): item is LocalImageEntry => Boolean(item))
-      .sort((a, b) => a.name.localeCompare(b.name, "zh-CN", { numeric: true, sensitivity: "base" }));
+    );
+
+    const entries = rawEntries.filter((item): item is LocalImageEntry => item !== null);
 
     if (entries.length === 0) {
       showMessage("error", "当前文件夹下未识别到可用图片（支持 bmp/png/jpg/jpeg/webp）");
@@ -276,7 +349,13 @@ export default function FramebufferTab() {
       return;
     }
 
-    const firstPath = entries[0].path;
+    const firstEntry = entries[0];
+    if (!firstEntry) {
+      showMessage("error", "图片目录读取结果为空");
+      return;
+    }
+
+    const firstPath = firstEntry.path;
     const folderPath = getFolderPathFromFilePath(firstPath);
 
     setFolderImageEntries(entries);
@@ -401,33 +480,59 @@ export default function FramebufferTab() {
                     </div>
 
                     <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/40 overflow-hidden">
-                      <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-gray-200 dark:border-gray-700">
-                        <div className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-200">
-                          <Image className="w-4 h-4" />
-                          当前文件夹图片
-                          <span className="text-xs text-gray-400">{filteredFolderImages.length} / {folderImageEntries.length}</span>
+                      <div className="px-3 py-3 border-b border-gray-200 dark:border-gray-700 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+                            <Image className="w-4 h-4" />
+                            当前文件夹图片
+                            <span className="text-xs text-gray-400">共 {folderImageEntries.length} 张，当前显示 {filteredFolderImages.length} 张</span>
+                          </div>
+                          <div className="text-xs text-gray-500 dark:text-gray-400">
+                            {currentResolution ? `当前设备：${currentResolution.label}` : "当前设备分辨率未读取"}
+                          </div>
                         </div>
-                        <div className="relative w-56 max-w-full">
-                          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+
+                        <div className="grid grid-cols-[minmax(0,1fr)_180px_180px] gap-3 items-center">
+                          <div className="relative min-w-0">
+                            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <input
+                              value={imageSearch}
+                              onChange={(e) => setImageSearch(e.target.value)}
+                              className="input text-sm pl-9"
+                              placeholder="搜索文件名"
+                            />
+                          </div>
+                          <select value={sortMode} onChange={(e) => setSortMode(e.target.value as ImageSortMode)} className="input text-sm">
+                            <option value="name">按文件名</option>
+                            <option value="mtime">按修改时间</option>
+                          </select>
+                          <select value={viewMode} onChange={(e) => setViewMode(e.target.value as ImageViewMode)} className="input text-sm">
+                            <option value="grid">预览网格</option>
+                            <option value="list">紧凑列表</option>
+                          </select>
+                        </div>
+
+                        <label className={`inline-flex items-center gap-2 text-sm ${currentResolution ? "text-gray-700 dark:text-gray-200" : "text-gray-400 cursor-not-allowed"}`}>
                           <input
-                            value={imageSearch}
-                            onChange={(e) => setImageSearch(e.target.value)}
-                            className="input text-sm pl-9"
-                            placeholder="搜索文件名"
+                            type="checkbox"
+                            checked={resolutionFilterEnabled}
+                            disabled={!currentResolution}
+                            onChange={(e) => setResolutionFilterEnabled(e.target.checked)}
                           />
-                        </div>
+                          仅显示匹配当前分辨率
+                        </label>
                       </div>
 
-                      <div className="max-h-[380px] overflow-auto p-3">
+                      <div className="max-h-[420px] overflow-auto p-3">
                         {folderImageEntries.length === 0 ? (
                           <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-600 px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
                             先选择一个图片文件夹，我会把里面可用的图片列出来。
                           </div>
                         ) : filteredFolderImages.length === 0 ? (
                           <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-600 px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-                            当前搜索条件下没有匹配图片。
+                            当前筛选条件下没有匹配图片。
                           </div>
-                        ) : (
+                        ) : viewMode === "grid" ? (
                           <div className="grid grid-cols-3 gap-3">
                             {filteredFolderImages.map((item) => {
                               const selected = item.path === imagePath;
@@ -442,8 +547,12 @@ export default function FramebufferTab() {
                                   }`}
                                   title={item.path}
                                 >
-                                  <div className="h-20 flex items-center justify-center bg-gradient-to-br from-gray-100 via-white to-gray-200 dark:from-gray-800 dark:via-gray-900 dark:to-gray-800 relative">
-                                    <Image className="w-8 h-8 text-gray-400" />
+                                  <div className="h-24 flex items-center justify-center bg-gradient-to-br from-gray-100 via-white to-gray-200 dark:from-gray-800 dark:via-gray-900 dark:to-gray-800 relative overflow-hidden">
+                                    {item.previewUrl ? (
+                                      <img src={item.previewUrl} alt={item.name} className="w-full h-full object-cover" />
+                                    ) : (
+                                      <Image className="w-8 h-8 text-gray-400" />
+                                    )}
                                     {selected && (
                                       <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-primary-600 text-white flex items-center justify-center shadow-sm">
                                         <Check className="w-3 h-3" />
@@ -452,7 +561,42 @@ export default function FramebufferTab() {
                                   </div>
                                   <div className="p-2.5 space-y-1">
                                     <div className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{item.name}</div>
-                                    <div className="text-[11px] uppercase tracking-wide text-gray-400">{item.ext.replace(".", "")}</div>
+                                    <div className="flex items-center justify-between gap-2 text-[11px] text-gray-400">
+                                      <span className="uppercase tracking-wide">{item.ext.replace(".", "")}</span>
+                                      <span>{item.width && item.height ? `${item.width}×${item.height}` : "未读取尺寸"}</span>
+                                    </div>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {filteredFolderImages.map((item) => {
+                              const selected = item.path === imagePath;
+                              return (
+                                <button
+                                  key={item.id}
+                                  onClick={() => setImagePath(item.path)}
+                                  className={`w-full text-left rounded-xl border px-3 py-2 transition-all ${
+                                    selected
+                                      ? "border-primary-500 ring-2 ring-primary-300/60 dark:ring-primary-700/40 bg-primary-50/70 dark:bg-primary-900/20"
+                                      : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 hover:border-primary-300 dark:hover:border-primary-700"
+                                  }`}
+                                  title={item.path}
+                                >
+                                  <div className="grid grid-cols-[minmax(0,1fr)_120px_90px] gap-3 items-center">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{item.name}</span>
+                                        {selected && <Check className="w-4 h-4 text-primary-600 shrink-0" />}
+                                      </div>
+                                      <div className="text-[11px] text-gray-400 truncate">{item.path}</div>
+                                    </div>
+                                    <div className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                                      {item.width && item.height ? `${item.width} × ${item.height}` : "未读取尺寸"}
+                                    </div>
+                                    <div className="text-xs uppercase tracking-wide text-gray-400 text-center">{item.ext.replace(".", "")}</div>
                                   </div>
                                 </button>
                               );
@@ -550,8 +694,15 @@ export default function FramebufferTab() {
                   <Monitor className="w-12 h-12 text-gray-400" />
                 </div>
                 <div className="text-sm text-gray-700 dark:text-gray-200 break-all">{imagePath || "尚未选择图片"}</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">
-                  已加载：{folderImageEntries.length} 张
+                <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
+                  <div>已加载：{folderImageEntries.length} 张</div>
+                  <div>
+                    当前图片尺寸：
+                    {(() => {
+                      const current = folderImageEntries.find((item) => item.path === imagePath);
+                      return current?.width && current?.height ? `${current.width} × ${current.height}` : "未读取";
+                    })()}
+                  </div>
                 </div>
               </div>
             </div>
