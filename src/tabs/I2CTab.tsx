@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Cpu, BookOpen, Edit3, Settings, Zap, RefreshCw, Download, Activity } from "lucide-react";
+import { Cpu, BookOpen, Edit3, Zap, RefreshCw, Download, Activity } from "lucide-react";
 import { tauriInvoke } from "../utils/tauri";
 import { useConnection } from "../App";
 

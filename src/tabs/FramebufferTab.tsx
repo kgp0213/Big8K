@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Upload,
   Image,
@@ -9,13 +9,14 @@ import {
   Film,
   Trash2,
   FolderOpen,
-  Plus,
   Loader2,
   Sparkles,
   Type,
   PanelTop,
   Send,
-  ScanSearch,
+  FolderTree,
+  Search,
+  Check,
 } from "lucide-react";
 import { useConnection } from "../App";
 import { tauriInvoke } from "../utils/tauri";
@@ -26,19 +27,47 @@ interface PatternResult {
   error?: string;
 }
 
+interface LocalImageEntry {
+  id: string;
+  name: string;
+  path: string;
+  ext: string;
+}
+
+const IMAGE_EXTENSIONS = new Set([".bmp", ".png", ".jpg", ".jpeg", ".webp"]);
+
+const getFileExtension = (fileName: string) => {
+  const dotIndex = fileName.lastIndexOf(".");
+  return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : "";
+};
+
+const getFolderPathFromFilePath = (filePath: string) => {
+  const normalized = filePath.replace(/[\\/]+$/, "");
+  const separators = Math.max(normalized.lastIndexOf("\\"), normalized.lastIndexOf("/"));
+  return separators >= 0 ? normalized.slice(0, separators) : normalized;
+};
+
 export default function FramebufferTab() {
   const { connection, appendLog, debugMode } = useConnection();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<"image" | "pattern" | "video">("pattern");
-  const [images] = useState<string[]>(["test_pattern_1.bmp", "test_pattern_2.bmp", "gradient.bmp", "color_bar.bmp"]);
   const [loading, setLoading] = useState<string | null>(null);
   const [customText, setCustomText] = useState("电子设计部");
   const [customSubtitle, setCustomSubtitle] = useState("Big8K Custom Text");
   const [disconnectedLogged, setDisconnectedLogged] = useState(false);
   const [textStyle, setTextStyle] = useState<"clean" | "poster">("clean");
   const [imagePath, setImagePath] = useState("");
+  const [selectedFolderPath, setSelectedFolderPath] = useState("");
+  const [folderImageEntries, setFolderImageEntries] = useState<LocalImageEntry[]>([]);
+  const [imageSearch, setImageSearch] = useState("");
 
   const isConnected = connection.connected && connection.type === "adb";
+
+  const filteredFolderImages = useMemo(() => {
+    const keyword = imageSearch.trim().toLowerCase();
+    if (!keyword) return folderImageEntries;
+    return folderImageEntries.filter((item) => item.name.toLowerCase().includes(keyword));
+  }, [folderImageEntries, imageSearch]);
 
   useEffect(() => {
     if (!isConnected && !disconnectedLogged) {
@@ -212,22 +241,51 @@ export default function FramebufferTab() {
     );
   };
 
-  const handleChooseImage = () => {
+  const handleChooseImageFolder = () => {
     fileInputRef.current?.click();
   };
 
   const handleImageSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
 
-    const maybePath = (file as File & { path?: string }).path;
-    if (maybePath) {
-      setImagePath(maybePath);
-      showMessage("success", `已选择图片: ${maybePath}`);
-    } else {
-      setImagePath(file.name);
-      showMessage("error", "当前环境未返回文件完整路径；请在 Tauri 桌面版中使用该功能");
+    const entries = files
+      .map((file, index) => {
+        const rawPath = (file as File & { path?: string; webkitRelativePath?: string }).path;
+        const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+        const path = rawPath || relativePath || file.name;
+        const ext = getFileExtension(file.name);
+        if (!IMAGE_EXTENSIONS.has(ext)) {
+          return null;
+        }
+        return {
+          id: `${file.name}-${index}`,
+          name: file.name,
+          path,
+          ext,
+        } satisfies LocalImageEntry;
+      })
+      .filter((item): item is LocalImageEntry => Boolean(item))
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-CN", { numeric: true, sensitivity: "base" }));
+
+    if (entries.length === 0) {
+      showMessage("error", "当前文件夹下未识别到可用图片（支持 bmp/png/jpg/jpeg/webp）");
+      setFolderImageEntries([]);
+      setSelectedFolderPath("");
+      setImagePath("");
+      return;
     }
+
+    const firstPath = entries[0].path;
+    const folderPath = getFolderPathFromFilePath(firstPath);
+
+    setFolderImageEntries(entries);
+    setSelectedFolderPath(folderPath || "当前选择目录");
+    setImagePath(firstPath);
+    setImageSearch("");
+    showMessage("success", `已载入图片文件夹，共 ${entries.length} 张可用图片`);
+
+    event.target.value = "";
   };
 
   return (
@@ -306,31 +364,128 @@ export default function FramebufferTab() {
                 本地图片显示到屏幕
               </div>
               <div className="panel-body space-y-3">
-                <input ref={fileInputRef} type="file" accept="image/*,.bmp" className="hidden" onChange={handleImageSelected} />
-                <div>
-                  <label className="block text-sm mb-1 text-gray-600 dark:text-gray-300">图片完整路径</label>
-                  <div className="flex gap-2">
-                    <input
-                      value={imagePath}
-                      onChange={(e) => setImagePath(e.target.value)}
-                      className="input text-sm flex-1"
-                      placeholder="例如：E:\\Resource\\8Big8K\\demo.png"
-                    />
-                    <button onClick={handleChooseImage} className="btn-secondary flex items-center gap-2">
-                      <FolderOpen className="w-4 h-4" />
-                      选择文件
-                    </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,.bmp,.webp"
+                  multiple
+                  className="hidden"
+                  onChange={handleImageSelected}
+                />
+                <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
+                  <div className="space-y-3 min-w-0">
+                    <div>
+                      <label className="block text-sm mb-1 text-gray-600 dark:text-gray-300">图片文件夹</label>
+                      <div className="flex gap-2">
+                        <input
+                          value={selectedFolderPath}
+                          readOnly
+                          className="input text-sm flex-1"
+                          placeholder="先选择一个本地图片文件夹"
+                        />
+                        <button onClick={handleChooseImageFolder} className="btn-secondary flex items-center gap-2 shrink-0">
+                          <FolderTree className="w-4 h-4" />
+                          选择文件夹
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm mb-1 text-gray-600 dark:text-gray-300">当前选中图片</label>
+                      <input
+                        value={imagePath}
+                        onChange={(e) => setImagePath(e.target.value)}
+                        className="input text-sm flex-1"
+                        placeholder="从下方图片列表中选择，或手动输入完整路径"
+                      />
+                    </div>
+
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/40 overflow-hidden">
+                      <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-gray-200 dark:border-gray-700">
+                        <div className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+                          <Image className="w-4 h-4" />
+                          当前文件夹图片
+                          <span className="text-xs text-gray-400">{filteredFolderImages.length} / {folderImageEntries.length}</span>
+                        </div>
+                        <div className="relative w-56 max-w-full">
+                          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                          <input
+                            value={imageSearch}
+                            onChange={(e) => setImageSearch(e.target.value)}
+                            className="input text-sm pl-9"
+                            placeholder="搜索文件名"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="max-h-[380px] overflow-auto p-3">
+                        {folderImageEntries.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-600 px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                            先选择一个图片文件夹，我会把里面可用的图片列出来。
+                          </div>
+                        ) : filteredFolderImages.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-600 px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                            当前搜索条件下没有匹配图片。
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-3 gap-3">
+                            {filteredFolderImages.map((item) => {
+                              const selected = item.path === imagePath;
+                              return (
+                                <button
+                                  key={item.id}
+                                  onClick={() => setImagePath(item.path)}
+                                  className={`group text-left rounded-xl border transition-all overflow-hidden ${
+                                    selected
+                                      ? "border-primary-500 ring-2 ring-primary-300/60 dark:ring-primary-700/40 bg-primary-50/70 dark:bg-primary-900/20"
+                                      : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 hover:border-primary-300 dark:hover:border-primary-700"
+                                  }`}
+                                  title={item.path}
+                                >
+                                  <div className="h-20 flex items-center justify-center bg-gradient-to-br from-gray-100 via-white to-gray-200 dark:from-gray-800 dark:via-gray-900 dark:to-gray-800 relative">
+                                    <Image className="w-8 h-8 text-gray-400" />
+                                    {selected && (
+                                      <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-primary-600 text-white flex items-center justify-center shadow-sm">
+                                        <Check className="w-3 h-3" />
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="p-2.5 space-y-1">
+                                    <div className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{item.name}</div>
+                                    <div className="text-[11px] uppercase tracking-wide text-gray-400">{item.ext.replace(".", "")}</div>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={handleDisplayImage} disabled={!isConnected || loading === "display_image"} className="btn-primary flex items-center gap-2">
-                    {loading === "display_image" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                    上传并显示
-                  </button>
-                  <button onClick={handleClearScreen} disabled={!isConnected || loading === "clear"} className="btn-secondary flex items-center gap-2">
-                    {loading === "clear" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
-                    清屏
-                  </button>
+
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-3 bg-gray-50/50 dark:bg-gray-800/40">
+                      <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">操作区</div>
+                      <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 leading-5">
+                        适合图片较多的目录浏览：先选文件夹，再从右侧列表挑一张图，最后执行上传显示。
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <button onClick={handleDisplayImage} disabled={!isConnected || loading === "display_image" || !imagePath.trim()} className="btn-primary flex items-center justify-center gap-2">
+                        {loading === "display_image" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                        上传并显示
+                      </button>
+                      <button onClick={handleClearScreen} disabled={!isConnected || loading === "clear"} className="btn-secondary flex items-center justify-center gap-2">
+                        {loading === "clear" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
+                        清屏
+                      </button>
+                    </div>
+                    <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-3 text-xs text-gray-500 dark:text-gray-400 space-y-1">
+                      <div>· 支持 bmp / png / jpg / jpeg / webp</div>
+                      <div>· 图片很多时可用搜索框快速筛选</div>
+                      <div>· 当前列表只做轻量浏览，不加载本地缩略图，避免卡顿</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -347,44 +502,56 @@ export default function FramebufferTab() {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 opacity-70">
+          <div className="grid grid-cols-3 gap-4">
             <div className="col-span-2 panel">
               <div className="panel-header flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <FolderOpen className="w-4 h-4" />
-                  历史图片列表（占位）
+                  已加载目录摘要
                 </div>
                 <div className="flex gap-2">
-                  <button className="btn-secondary text-sm flex items-center gap-1 px-3 py-1" disabled>
-                    <ScanSearch className="w-3.5 h-3.5" />
-                    扫描
-                  </button>
-                  <button className="btn-danger text-sm flex items-center gap-1 px-3 py-1" disabled>
+                  <button
+                    className="btn-secondary text-sm flex items-center gap-1 px-3 py-1"
+                    onClick={() => {
+                      setFolderImageEntries([]);
+                      setSelectedFolderPath("");
+                      setImagePath("");
+                      setImageSearch("");
+                      appendLog("已清空当前图片目录缓存", "info");
+                    }}
+                    disabled={folderImageEntries.length === 0}
+                  >
                     <Trash2 className="w-3.5 h-3.5" />
-                    清空
+                    清空列表
                   </button>
                 </div>
               </div>
               <div className="panel-body">
                 <div className="grid grid-cols-4 gap-3">
-                  {images.map((img, idx) => (
-                    <div key={idx} className="aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center relative overflow-hidden">
+                  {folderImageEntries.slice(0, 8).map((img) => (
+                    <div key={img.id} className="aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center relative overflow-hidden border border-gray-200 dark:border-gray-700">
                       <Image className="w-8 h-8 text-gray-400" />
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-1 truncate">{img}</div>
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/55 text-white text-xs px-2 py-1 truncate">{img.name}</div>
                     </div>
                   ))}
-                  <div className="aspect-video border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg flex items-center justify-center cursor-not-allowed opacity-60">
-                    <Plus className="w-8 h-8 text-gray-400" />
-                  </div>
+                  {folderImageEntries.length === 0 && (
+                    <div className="col-span-4 aspect-[4/1] border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg flex items-center justify-center opacity-70 text-sm text-gray-500 dark:text-gray-400">
+                      还没有加载图片目录
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
             <div className="panel">
-              <div className="panel-header">预览占位</div>
-              <div className="panel-body">
-                <div className="aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center">
+              <div className="panel-header">当前选择</div>
+              <div className="panel-body space-y-3">
+                <div className="aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center border border-gray-200 dark:border-gray-700">
                   <Monitor className="w-12 h-12 text-gray-400" />
+                </div>
+                <div className="text-sm text-gray-700 dark:text-gray-200 break-all">{imagePath || "尚未选择图片"}</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  已加载：{folderImageEntries.length} 张
                 </div>
               </div>
             </div>
