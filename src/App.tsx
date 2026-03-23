@@ -13,7 +13,7 @@ import DebugTab from "./tabs/DebugTab";
 
 type TabType = "home" | "mipi" | "fb" | "i2c" | "gpio" | "script" | "network" | "debug";
 type ConnectionType = "adb" | "ssh" | "disconnected";
-type LogLevel = "info" | "success" | "warning" | "error";
+type LogLevel = "info" | "success" | "warning" | "error" | "debug";
 
 interface ConnectionStatus {
   type: ConnectionType;
@@ -41,6 +41,8 @@ interface ConnectionContextType {
   logs: LogEntry[];
   appendLog: (message: string, level?: LogLevel) => void;
   clearLogs: () => void;
+  debugMode: boolean;
+  setDebugMode: (value: boolean) => void;
 }
 
 export const ConnectionContext = createContext<ConnectionContextType>({
@@ -49,6 +51,8 @@ export const ConnectionContext = createContext<ConnectionContextType>({
   logs: [],
   appendLog: () => {},
   clearLogs: () => {},
+  debugMode: false,
+  setDebugMode: () => {},
 });
 
 export const useConnection = () => useContext(ConnectionContext);
@@ -57,8 +61,8 @@ const tabs = [
   { id: "mipi" as TabType, label: "点屏配置", icon: Monitor },
   { id: "fb" as TabType, label: "显示画面", icon: Image },
   { id: "debug" as TabType, label: "命令调试", icon: Terminal },
-  { id: "i2c" as TabType, label: "I2C/EEPROM", icon: Cpu },
-  { id: "gpio" as TabType, label: "GPIO", icon: Activity },
+  { id: "i2c" as TabType, label: "I2C/GPIO", icon: Cpu },
+  { id: "gpio" as TabType, label: "代码转换", icon: Activity },
   { id: "script" as TabType, label: "脚本管理", icon: FileCode },
   { id: "network" as TabType, label: "网络配置", icon: Wifi },
   { id: "home" as TabType, label: "总览", icon: Home },
@@ -77,6 +81,7 @@ function App() {
     connected: false,
   });
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [debugMode, setDebugMode] = useState(false);
 
   const appendLog = (message: string, level: LogLevel = "info") => {
     const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -138,7 +143,7 @@ function App() {
   };
 
   return (
-    <ConnectionContext.Provider value={{ connection, setConnection, logs, appendLog, clearLogs }}>
+    <ConnectionContext.Provider value={{ connection, setConnection, logs, appendLog, clearLogs, debugMode, setDebugMode }}>
       <div className="h-screen overflow-hidden bg-gray-100 dark:bg-gray-950 flex items-start justify-center">
         <div
           className="origin-top"

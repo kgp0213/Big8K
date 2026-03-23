@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Upload,
   Image,
@@ -11,7 +11,6 @@ import {
   FolderOpen,
   Plus,
   Loader2,
-  AlertCircle,
   Sparkles,
   Type,
   PanelTop,
@@ -28,40 +27,61 @@ interface PatternResult {
 }
 
 export default function FramebufferTab() {
-  const { connection } = useConnection();
+  const { connection, appendLog, debugMode } = useConnection();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<"image" | "pattern" | "video">("pattern");
   const [images] = useState<string[]>(["test_pattern_1.bmp", "test_pattern_2.bmp", "gradient.bmp", "color_bar.bmp"]);
   const [loading, setLoading] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [customText, setCustomText] = useState("电子设计部");
   const [customSubtitle, setCustomSubtitle] = useState("Big8K Custom Text");
+  const [disconnectedLogged, setDisconnectedLogged] = useState(false);
   const [textStyle, setTextStyle] = useState<"clean" | "poster">("clean");
   const [imagePath, setImagePath] = useState("");
 
   const isConnected = connection.connected && connection.type === "adb";
 
+  useEffect(() => {
+    if (!isConnected && !disconnectedLogged) {
+      appendLog("连接状态 -> 未连接 ADB 设备，显示画面功能当前不可用", "warning");
+      setDisconnectedLogged(true);
+    }
+    if (isConnected && disconnectedLogged) {
+      setDisconnectedLogged(false);
+    }
+  }, [isConnected, disconnectedLogged, appendLog]);
+
   const showMessage = (type: "success" | "error", text: string) => {
-    setMessage({ type, text });
-    setTimeout(() => setMessage(null), 3000);
+    appendLog(text, type === "success" ? "success" : "error");
   };
 
-  const runCommand = async (cmd: string, args?: Record<string, unknown>, loadingKey?: string) => {
+  const runCommand = async (cmd: string, args?: Record<string, unknown>, loadingKey?: string, actionLabel?: string) => {
     if (!isConnected) {
-      showMessage("error", "请先在右侧连接并选中 ADB 设备");
+      showMessage("error", "连接检查 -> 未连接 ADB 设备，请先在右侧完成连接");
       return;
     }
 
-    setLoading(loadingKey || cmd);
+    const effectiveKey = loadingKey || cmd;
+    const effectiveLabel = actionLabel || cmd;
+    appendLog(`任务开始 -> ${effectiveLabel}`, "info");
+    if (debugMode) {
+      if (cmd === "sync_runtime_patterns") {
+        appendLog("-> adb shell mkdir -p /vismm/fbshow/big8k_runtime", "debug");
+        appendLog("-> adb push python/runtime_fbshow/render_patterns.py /vismm/fbshow/big8k_runtime/render_patterns.py", "debug");
+        appendLog("-> adb shell chmod 755 /vismm/fbshow/big8k_runtime/render_patterns.py", "debug");
+      } else {
+        appendLog(`-> invoke ${cmd}`, "debug");
+      }
+    }
+    setLoading(effectiveKey);
     try {
       const result = await tauriInvoke<PatternResult>(cmd, args);
       if (result.success) {
-        showMessage("success", result.message || "执行成功");
+        showMessage("success", `执行完成 -> ${effectiveLabel}`);
       } else {
-        showMessage("error", result.error || result.message || "执行失败");
+        showMessage("error", result.error || result.message || `执行失败 -> ${effectiveLabel}`);
       }
     } catch (err) {
-      showMessage("error", String(err));
+      showMessage("error", `${effectiveLabel}异常: ${String(err)}`);
     } finally {
       setLoading(null);
     }
@@ -69,57 +89,97 @@ export default function FramebufferTab() {
 
   const handlePatternDisplay = async (pattern: string) => {
     if (!isConnected) {
-      showMessage("error", "请先在右侧连接并选中 ADB 设备");
+      showMessage("error", "连接检查 -> 未连接 ADB 设备，请先在右侧完成连接");
       return;
     }
 
-    setLoading(pattern);
+    const patternLabels: Record<string, string> = {
+      pure_red: "纯红",
+      pure_green: "纯绿",
+      pure_blue: "纯蓝",
+      pure_black: "纯黑",
+      pure_white: "纯白",
+      gray_gradient: "灰阶渐变",
+      red_gradient: "红渐变",
+      green_gradient: "绿渐变",
+      blue_gradient: "蓝渐变",
+      h_gradient_1: "横向渐变 1",
+      h_gradient_2: "横向渐变 2",
+      v_gradient_1: "竖向渐变 1",
+      v_gradient_2: "竖向渐变 2",
+      h_colorbar_gradient_1: "横向彩条渐变 1",
+      h_colorbar_gradient_2: "横向彩条渐变 2",
+      v_colorbar_gradient_1: "竖向彩条渐变 1",
+      v_colorbar_gradient_2: "竖向彩条渐变 2",
+      radial_gray: "放射灰阶",
+      color_bar: "彩条",
+      checkerboard: "棋盘格",
+      logic_34: "炫彩 1",
+    };
+
+    const boardCommand = pattern === "logic_34"
+      ? "python3 /vismm/fbshow/logicPictureShow.py 34"
+      : `python3 /vismm/fbshow/big8k_runtime/render_patterns.py ${pattern}`;
+
+    appendLog(`显示画面 -> ${patternLabels[pattern] || pattern}`, "info");
+    if (debugMode) {
+      appendLog(`-> adb shell ${boardCommand}`, "debug");
+    }
     try {
       let result: PatternResult;
 
       switch (pattern) {
-        case "red":
-        case "green":
-        case "blue":
-        case "white":
-        case "black":
-          result = await tauriInvoke<PatternResult>("display_solid_color", { color: pattern });
-          break;
-        case "gray":
+        case "pure_red":
+        case "pure_green":
+        case "pure_blue":
+        case "pure_white":
+        case "pure_black":
+        case "gray_gradient":
         case "red_gradient":
         case "green_gradient":
-        case "blue_gradient": {
-          const gradientType = pattern.replace("_gradient", "");
-          result = await tauriInvoke<PatternResult>("display_gradient", { gradientType });
+        case "blue_gradient":
+        case "h_gradient_1":
+        case "h_gradient_2":
+        case "v_gradient_1":
+        case "v_gradient_2":
+        case "h_colorbar_gradient_1":
+        case "h_colorbar_gradient_2":
+        case "v_colorbar_gradient_1":
+        case "v_colorbar_gradient_2":
+        case "radial_gray":
+        case "color_bar":
+        case "checkerboard": {
+          result = await tauriInvoke<PatternResult>("run_runtime_pattern", { request: { pattern } });
           break;
         }
-        case "color_bar":
-          result = await tauriInvoke<PatternResult>("display_color_bar");
+        case "logic_34": {
+          const logicPattern = Number(pattern.replace("logic_", ""));
+          result = await tauriInvoke<PatternResult>("run_logic_pattern", { request: { pattern: logicPattern } });
           break;
-        case "checkerboard":
-          result = await tauriInvoke<PatternResult>("display_checkerboard");
-          break;
+        }
         default:
           result = { success: false, message: "", error: "未知图案类型" };
       }
 
       if (result.success) {
-        showMessage("success", result.message);
+        showMessage("success", `显示完成 -> ${patternLabels[pattern] || pattern}`);
       } else {
-        showMessage("error", result.error || result.message || "图案显示失败");
+        showMessage("error", result.error || result.message || `显示失败 -> ${patternLabels[pattern] || pattern}`);
       }
     } catch (err) {
       showMessage("error", String(err));
-    } finally {
-      setLoading(null);
     }
   };
 
   const handleClearScreen = async () => {
-    await runCommand("clear_screen", undefined, "clear");
+    await runCommand("clear_screen", undefined, "clear", "清屏");
   };
 
   const handleDisplayText = async () => {
+    if (debugMode) {
+      appendLog(`-> adb push python/fb_text_custom.py /data/local/tmp/fb_text_custom.py`, "debug");
+      appendLog(`-> adb shell python3 /data/local/tmp/fb_text_custom.py \"${customText}\" \"${customSubtitle}\" ${textStyle}`, "debug");
+    }
     await runCommand(
       "display_text",
       {
@@ -129,11 +189,17 @@ export default function FramebufferTab() {
           style: textStyle,
         },
       },
-      "display_text"
+      "display_text",
+      "文字上屏"
     );
   };
 
   const handleDisplayImage = async () => {
+    if (debugMode) {
+      appendLog(`-> adb push \"${imagePath}\" /data/local/tmp/selected_image`, "debug");
+      appendLog(`-> adb push python/fb_image_display.py /data/local/tmp/fb_image_display.py`, "debug");
+      appendLog(`-> adb shell python3 /data/local/tmp/fb_image_display.py /data/local/tmp/selected_image`, "debug");
+    }
     await runCommand(
       "display_image",
       {
@@ -141,7 +207,8 @@ export default function FramebufferTab() {
           image_path: imagePath,
         },
       },
-      "display_image"
+      "display_image",
+      "图片上屏"
     );
   };
 
@@ -165,25 +232,6 @@ export default function FramebufferTab() {
 
   return (
     <div className="space-y-4">
-      {!isConnected && (
-        <div className="flex items-center gap-2 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-          <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
-          <span className="text-sm text-yellow-800 dark:text-yellow-200">未连接 ADB 设备，图案显示功能暂不可用</span>
-        </div>
-      )}
-
-      {message && (
-        <div
-          className={`p-3 rounded-lg ${
-            message.type === "success"
-              ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300"
-              : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300"
-          }`}
-        >
-          {message.text}
-        </div>
-      )}
-
       <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 pb-2">
         <button
           onClick={() => setActiveSubTab("image")}
@@ -347,9 +395,19 @@ export default function FramebufferTab() {
       {activeSubTab === "pattern" && (
         <div className="space-y-5">
           <div className="panel">
-            <div className="panel-header flex items-center gap-2">
-              <Sparkles className="w-4 h-4" />
-              实用 Demo
+            <div className="panel-header flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4" />
+                实用 Demo
+              </div>
+              <button
+                onClick={() => runCommand("sync_runtime_patterns", undefined, "sync_runtime_patterns", "同步画面脚本")}
+                disabled={loading === "sync_runtime_patterns" || !isConnected}
+                className="btn-secondary text-sm flex items-center gap-2"
+              >
+                <Upload className="w-4 h-4" />
+                {loading === "sync_runtime_patterns" ? "同步中..." : "同步画面"}
+              </button>
             </div>
             <div className="panel-body grid grid-cols-3 gap-4">
               {[
@@ -362,13 +420,12 @@ export default function FramebufferTab() {
                   <button
                     key={item.key}
                     onClick={() => runCommand(item.cmd, undefined, item.key)}
-                    disabled={loading !== null || !isConnected}
+                    disabled={!isConnected}
                     className="text-left panel hover:ring-2 hover:ring-primary-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <div className="panel-body space-y-3">
                       <div className="flex items-center justify-between">
                         <Icon className="w-6 h-6 text-primary-600" />
-                        {loading === item.key && <Loader2 className="w-5 h-5 animate-spin text-primary-600" />}
                       </div>
                       <div className="font-semibold text-base">{item.title}</div>
                       <div className="text-sm text-gray-500 dark:text-gray-400">{item.desc}</div>
@@ -379,66 +436,36 @@ export default function FramebufferTab() {
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-5 gap-4">
             {[
-              { name: "黑屏", color: "black", bg: "bg-black" },
-              { name: "红屏", color: "red", bg: "bg-red-500" },
-              { name: "绿屏", color: "green", bg: "bg-green-500" },
-              { name: "蓝屏", color: "blue", bg: "bg-blue-500" },
-              { name: "白屏", color: "white", bg: "bg-white border" },
-            ].map((pattern, idx) => (
-              <button
-                key={idx}
-                onClick={() => handlePatternDisplay(pattern.color)}
-                disabled={loading !== null || !isConnected}
-                className="panel cursor-pointer hover:ring-2 hover:ring-primary-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <div className={`h-24 rounded-t-lg ${pattern.bg} flex items-center justify-center`}>
-                  {loading === pattern.color && <Loader2 className="w-8 h-8 text-white animate-spin" />}
-                </div>
-                <div className="p-3 text-center text-sm font-medium">{pattern.name}</div>
-              </button>
-            ))}
-
-            {[
-              { name: "灰阶渐变", color: "gray", bg: "bg-gradient-to-r from-black to-white" },
+              { name: "横向渐变 1", color: "h_gradient_1", bg: "bg-gradient-to-r from-black via-gray-400 to-white" },
+              { name: "横向渐变 2", color: "h_gradient_2", bg: "bg-gradient-to-r from-white via-gray-400 to-black" },
+              { name: "竖向渐变 1", color: "v_gradient_1", bg: "bg-gradient-to-b from-black to-white" },
+              { name: "竖向渐变 2", color: "v_gradient_2", bg: "bg-gradient-to-b from-white to-black" },
+              { name: "放射灰阶", color: "radial_gray", bg: "bg-radial-[at_center] from-white via-gray-400 to-black" },
+              { name: "棋盘格", color: "checkerboard", bg: "bg-[linear-gradient(45deg,#111_25%,#fff_25%,#fff_50%,#111_50%,#111_75%,#fff_75%,#fff_100%)] bg-[length:24px_24px]" },
+              { name: "炫彩 1", color: "logic_34", bg: "bg-gradient-to-r from-red-500 via-yellow-400 via-green-400 via-cyan-400 via-blue-500 via-pink-500 to-red-500" },
+              { name: "横向彩条渐变 1", color: "h_colorbar_gradient_1", bg: "bg-gradient-to-r from-blue-500 via-green-500 to-red-500" },
+              { name: "横向彩条渐变 2", color: "h_colorbar_gradient_2", bg: "bg-gradient-to-r from-red-500 via-green-500 to-blue-500" },
+              { name: "竖向彩条渐变 1", color: "v_colorbar_gradient_1", bg: "bg-gradient-to-b from-blue-500 via-green-500 to-red-500" },
+              { name: "竖向彩条渐变 2", color: "v_colorbar_gradient_2", bg: "bg-gradient-to-b from-red-500 via-green-500 to-blue-500" },
               { name: "红渐变", color: "red_gradient", bg: "bg-gradient-to-r from-black to-red-600" },
               { name: "绿渐变", color: "green_gradient", bg: "bg-gradient-to-r from-black to-green-600" },
               { name: "蓝渐变", color: "blue_gradient", bg: "bg-gradient-to-r from-black to-blue-600" },
+              { name: "彩条", color: "color_bar", bg: "bg-[linear-gradient(to_right,#ffffff_0%,#ffffff_12.5%,#ffff00_12.5%,#ffff00_25%,#00ffff_25%,#00ffff_37.5%,#00ff00_37.5%,#00ff00_50%,#ff00ff_50%,#ff00ff_62.5%,#0000ff_62.5%,#0000ff_75%,#ff0000_75%,#ff0000_87.5%,#000000_87.5%,#000000_100%)]" },
+              { name: "纯红", color: "pure_red", bg: "bg-red-500" },
+              { name: "纯绿", color: "pure_green", bg: "bg-green-500" },
+              { name: "纯蓝", color: "pure_blue", bg: "bg-blue-500" },
+              { name: "纯黑", color: "pure_black", bg: "bg-black" },
+              { name: "纯白", color: "pure_white", bg: "bg-white border" },
             ].map((pattern, idx) => (
               <button
                 key={idx}
                 onClick={() => handlePatternDisplay(pattern.color)}
-                disabled={loading !== null || !isConnected}
+                disabled={!isConnected}
                 className="panel cursor-pointer hover:ring-2 hover:ring-primary-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <div className={`h-24 rounded-t-lg ${pattern.bg} flex items-center justify-center`}>
-                  {loading === pattern.color && <Loader2 className="w-8 h-8 text-white animate-spin" />}
-                </div>
-                <div className="p-3 text-center text-sm font-medium">{pattern.name}</div>
-              </button>
-            ))}
-
-            {[
-              {
-                name: "彩条",
-                color: "color_bar",
-                bg: "bg-gradient-to-r from-white via-yellow-400 via-cyan-400 via-green-400 via-pink-400 via-red-400 via-blue-400 to-black",
-              },
-              {
-                name: "棋盘格",
-                color: "checkerboard",
-                bg: "bg-[linear-gradient(45deg,#111_25%,#fff_25%,#fff_50%,#111_50%,#111_75%,#fff_75%,#fff_100%)] bg-[length:24px_24px]",
-              },
-            ].map((pattern, idx) => (
-              <button
-                key={idx}
-                onClick={() => handlePatternDisplay(pattern.color)}
-                disabled={loading !== null || !isConnected}
-                className="panel cursor-pointer hover:ring-2 hover:ring-primary-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <div className={`h-24 rounded-t-lg ${pattern.bg} flex items-center justify-center`}>
-                  {loading === pattern.color && <Loader2 className="w-8 h-8 text-white animate-spin" />}
                 </div>
                 <div className="p-3 text-center text-sm font-medium">{pattern.name}</div>
               </button>

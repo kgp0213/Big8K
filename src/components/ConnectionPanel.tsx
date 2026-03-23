@@ -39,7 +39,7 @@ interface DeviceProbeResult {
 }
 
 interface ConnectionPanelProps {
-  logs: { id: string; time: string; level: "info" | "success" | "warning" | "error"; message: string }[];
+  logs: { id: string; time: string; level: "info" | "success" | "warning" | "error" | "debug"; message: string }[];
   clearLogs: () => void;
 }
 
@@ -55,7 +55,7 @@ const getAdbStatusLabel = (status: string) => {
     case "device":
       return "已连接";
     case "offline":
-      return "设备已连接";
+      return "设备已连接但离线";
     case "unauthorized":
       return "设备未授权，请在设备上确认调试授权";
     case "recovery":
@@ -96,7 +96,21 @@ const getAdbStatusBadgeClass = (status: string) => {
 };
 
 export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProps) {
-  const { connection, setConnection, appendLog } = useConnection();
+  const { connection, setConnection, appendLog, debugMode, setDebugMode } = useConnection();
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+
+  const handleClearLogs = () => {
+    if (debugMode) {
+      setConfirmClearOpen(true);
+      return;
+    }
+    clearLogs();
+  };
+
+  const confirmClearLogs = () => {
+    clearLogs();
+    setConfirmClearOpen(false);
+  };
   const [adbConnected, setAdbConnected] = useState(false);
   const [netConnected, setNetConnected] = useState(false);
   const [activeConnection, setActiveConnection] = useState<"adb" | "ssh">("adb");
@@ -189,6 +203,9 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
   const probeSshDevice = async (host: string, silent = false) => {
     try {
       const command = "MODEL=$(getprop ro.product.model 2>/dev/null); VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null); BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null); [ -e /dev/fb0 ] && echo FB0=1 || echo FB0=0; command -v vismpwr >/dev/null 2>&1 && echo VISMPWR=1 || echo VISMPWR=0; command -v python3 >/dev/null 2>&1 && echo PYTHON3=1 || echo PYTHON3=0; echo MODEL=$MODEL; echo VSIZE=$VSIZE; echo BPP=$BPP";
+      if (debugMode && !silent) {
+        appendLog(`-> ssh ${sshUser}@${host}:${sshPort} \"${command}\"`, "debug");
+      }
       const result = await tauriInvoke<{ success: boolean; output: string; error?: string }>("ssh_exec", {
         host,
         port: sshPort,
@@ -266,7 +283,10 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
     if (!silent) {
       setChecking(true);
       setMessage(null);
-      appendLog("开始检测 ADB 设备...", "info");
+      appendLog("任务开始 -> ADB 设备检测", "info");
+      if (debugMode) {
+        appendLog("-> adb devices -l", "debug");
+      }
     }
 
     try {
@@ -313,6 +333,9 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
     if (!selectedId) return;
 
     try {
+      if (debugMode) {
+        appendLog(`-> adb target ${selectedId}`, "debug");
+      }
       await syncSelectedDevice(selectedId);
       setAdbConnected(true);
       await probeAdbDevice(selectedId);
@@ -332,7 +355,9 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
     setChecking(true);
     try {
       const target = adbTcpAddress.includes(":") ? adbTcpAddress : `${adbTcpAddress}:5555`;
-      appendLog(`ADB 命令: adb connect ${target}`, "info");
+      if (debugMode) {
+        appendLog(`-> adb connect ${target}`, "debug");
+      }
       const result = await tauriInvoke<ActionResult>("adb_connect", { target });
       if (result.success) {
         showMessage("success", result.output || `ADB 已连接到 ${target}`);
@@ -350,6 +375,9 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
 
   const disconnectAdb = async () => {
     try {
+      if (debugMode) {
+        appendLog("-> adb disconnect", "info");
+      }
       await tauriInvoke<ActionResult>("adb_disconnect", {});
     } catch {
       // ignore
@@ -364,7 +392,10 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
   const checkSshConnection = async () => {
     setChecking(true);
     setMessage(null);
-    appendLog(`开始检测 SSH: ${sshUser}@${ipAddress}:${sshPort}`, "info");
+    appendLog(`任务开始 -> SSH 连接检查`, "info");
+    if (debugMode) {
+      appendLog(`-> ssh ${sshUser}@${ipAddress}:${sshPort}`, "info");
+    }
     try {
       const result = await tauriInvoke<{ success: boolean; output: string; error?: string }>("ssh_connect", {
         host: ipAddress,
@@ -414,7 +445,7 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
   }, [logs]);
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-4 space-y-4 relative">
       {message && (
         <div
           className={`p-2 rounded-lg text-sm ${
@@ -424,6 +455,31 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
           }`}
         >
           {message.text}
+        </div>
+      )}
+
+      {confirmClearOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/35" onClick={() => setConfirmClearOpen(false)} />
+          <div className="relative w-[280px] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl p-4 space-y-4">
+            <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">确认清空日志</div>
+            <div className="text-sm text-gray-600 dark:text-gray-300">调试模式已开启，确定要清空执行日志吗？</div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmClearOpen(false)}
+                className="text-xs px-3 py-1.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200"
+              >
+                取消
+              </button>
+              <button
+                autoFocus
+                onClick={confirmClearLogs}
+                className="text-xs px-3 py-1.5 rounded bg-red-600 text-white"
+              >
+                确认清空
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -579,11 +635,6 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
                 ))}
               </select>
             </div>
-            <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-2 text-xs text-gray-500 dark:text-gray-400 space-y-1 bg-gray-50/60 dark:bg-gray-800/40">
-              <div>SSH 采用内置账号配置，只保留板卡网址给用户选择。</div>
-              <div>当前：{sshUser}@{ipAddress}:{sshPort}</div>
-              <div>会默认记住最近一次连接成功的板卡 IP。</div>
-            </div>
             <div className="flex gap-2">
               <button onClick={netConnected ? disconnectSsh : checkSshConnection} disabled={checking} className={`flex-1 btn ${netConnected ? "btn-danger" : "btn-success"}`}>
                 <Power className="w-4 h-4 inline mr-1" />
@@ -598,9 +649,15 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
       )}
 
       <div className="panel">
-        <div className="panel-header flex items-center justify-between">
-          <span>执行日志</span>
-          <button onClick={clearLogs} className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+        <div className="panel-header flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <span>执行日志</span>
+            <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap select-none">
+              <input type="checkbox" checked={debugMode} onChange={(e) => setDebugMode(e.target.checked)} />
+              调试模式
+            </label>
+          </div>
+          <button onClick={handleClearLogs} className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
             清空日志
           </button>
         </div>
@@ -620,7 +677,9 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
                           ? "text-yellow-600"
                           : log.level === "success"
                             ? "text-green-600"
-                            : "text-gray-700 dark:text-gray-200"
+                            : log.level === "debug"
+                              ? "text-blue-600 dark:text-blue-300"
+                              : "text-gray-700 dark:text-gray-200"
                     }
                   >
                     {log.message}
@@ -639,3 +698,4 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
     </div>
   );
 }
+

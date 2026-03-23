@@ -89,6 +89,36 @@ pub struct ImageDisplayRequest {
     pub image_path: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogicPatternRequest {
+    pub pattern: u8,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuntimePatternRequest {
+    pub pattern: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PowerRailReading {
+    pub name: String,
+    pub addr: String,
+    pub voltage: f64,
+    pub current_ma: Option<f64>,
+    pub power_mw: Option<f64>,
+    pub status: String,
+    pub gain_mode: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PowerRailsResult {
+    pub success: bool,
+    pub rails: Vec<PowerRailReading>,
+    pub total_power_mw: Option<f64>,
+    pub error: Option<String>,
+}
+
 impl Default for ConnectionState {
     fn default() -> Self {
         Self {
@@ -318,6 +348,24 @@ fn project_root() -> std::path::PathBuf {
 
 fn project_file(path: &str) -> String {
     project_root().join(path).to_string_lossy().to_string()
+}
+
+fn run_python_script(state: &tauri::State<Mutex<ConnectionState>>, script_path: &str, args: &[&str]) -> Result<AdbActionResult, String> {
+    let remote_script = "/data/local/tmp/_big8k_script.py";
+    let push_result = adb_push_internal(state, script_path, remote_script)?;
+    if !push_result.success {
+        return Ok(push_result);
+    }
+
+    let mut command = format!("python3 {}", shell_quote(remote_script));
+    for arg in args {
+        command.push(' ');
+        command.push_str(&shell_quote(arg));
+    }
+
+    let exec_result = adb_shell_internal(state, &command)?;
+    let _ = adb_shell_internal(state, &format!("rm -f {}", shell_quote(remote_script)));
+    Ok(exec_result)
 }
 
 #[tauri::command]
@@ -907,6 +955,193 @@ print('OK')"#,
 }
 
 #[tauri::command]
+fn sync_runtime_patterns(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
+    let remote_dir = "/vismm/fbshow/big8k_runtime";
+    match adb_shell_internal(&state, &format!("mkdir -p {}", remote_dir)) {
+        Ok(result) if !result.success => {
+            return PatternResult { success: false, message: result.output, error: result.error };
+        }
+        Err(error) => {
+            return PatternResult { success: false, message: String::new(), error: Some(error) };
+        }
+        _ => {}
+    }
+
+    match adb_push_internal(&state, &project_file("python/runtime_fbshow/render_patterns.py"), "/vismm/fbshow/big8k_runtime/render_patterns.py") {
+        Ok(result) if result.success => {}
+        Ok(result) => {
+            return PatternResult { success: false, message: result.output, error: result.error };
+        }
+        Err(error) => {
+            return PatternResult { success: false, message: String::new(), error: Some(error) };
+        }
+    }
+
+    let _ = adb_shell_internal(&state, "chmod 755 /vismm/fbshow/big8k_runtime/render_patterns.py");
+    PatternResult {
+        success: true,
+        message: "已同步画面脚本到 /vismm/fbshow/big8k_runtime".to_string(),
+        error: None,
+    }
+}
+
+#[tauri::command]
+fn run_runtime_pattern(request: RuntimePatternRequest, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
+    let command = format!("python3 /vismm/fbshow/big8k_runtime/render_patterns.py {}", shell_quote(&request.pattern));
+    match adb_shell_internal(&state, &command) {
+        Ok(result) if result.success => PatternResult {
+            success: true,
+            message: format!("已显示画面 {}", request.pattern),
+            error: None,
+        },
+        Ok(result) => PatternResult {
+            success: false,
+            message: result.output,
+            error: result.error,
+        },
+        Err(error) => PatternResult {
+            success: false,
+            message: String::new(),
+            error: Some(error),
+        },
+    }
+}
+
+#[tauri::command]
+fn read_power_rails(state: tauri::State<Mutex<ConnectionState>>) -> PowerRailsResult {
+    let script = r#"
+import json
+import smbus2
+import subprocess
+import time
+BUS=4
+
+rails = [
+    {"name":"VCI","addr":0x41,"rs_low":0.2,"gpio_sensitive":True},
+    {"name":"VDDIO","addr":0x45,"rs_low":0.2,"gpio_sensitive":True},
+    {"name":"DVDD","addr":0x48,"rs_low":0.2,"gpio_sensitive":False},
+    {"name":"ELVDD","addr":0x40,"rs_low":0.025,"gpio_sensitive":False},
+    {"name":"ELVSS","addr":0x46,"rs_low":None,"gpio_sensitive":False},
+    {"name":"AVDD","addr":0x44,"rs_low":0.2,"gpio_sensitive":False},
+    {"name":"VGH","addr":0x4C,"rs_low":0.2,"gpio_sensitive":False},
+    {"name":"VGL","addr":0x4A,"rs_low":None,"gpio_sensitive":False},
+]
+
+def gpio3b5_set(value:int):
+    pin = 109
+    try:
+        with open('/sys/class/gpio/export','w') as f:
+            f.write(str(pin))
+    except Exception:
+        pass
+    with open(f'/sys/class/gpio/gpio{pin}/direction','w') as f:
+        f.write('out')
+    with open(f'/sys/class/gpio/gpio{pin}/value','w') as f:
+        f.write(str(value))
+    time.sleep(0.2)
+
+def _read_word(bus, addr, reg):
+    bus.write_byte(addr, reg)
+    msb, lsb = bus.read_i2c_block_data(addr, reg, 2)
+    return (msb << 8) | lsb
+
+def read_bus_voltage(addr):
+    with smbus2.SMBus(BUS) as bus:
+        raw = _read_word(bus, addr, 0x02)
+        return raw * 1.25e-3
+
+def read_shunt_raw(addr):
+    with smbus2.SMBus(BUS) as bus:
+        return _read_word(bus, addr, 0x01)
+
+def calc_current_ma(raw, rs):
+    signed = raw - 0x10000 if raw & 0x8000 else raw
+    vshunt = signed * 2.5e-6
+    return vshunt / rs * 1000.0
+
+results=[]
+total=0.0
+for rail in rails:
+    name=rail['name']
+    addr=rail['addr']
+    voltage=read_bus_voltage(addr)
+    current_ma=None
+    power_mw=None
+    status='正常'
+    gain_mode=None
+    note=None
+
+    if name == 'VGL':
+        vddio = read_bus_voltage(0x45)
+        vgl_sense = read_bus_voltage(0x4F)
+        current_ma = 1000.0 * (vgl_sense - vddio / 2.0) / 50.0 / 0.2
+        voltage = -abs(voltage)
+        power_mw = abs(voltage) * abs(current_ma)
+        gain_mode = 'INA282(50V/V)'
+    elif name == 'ELVSS':
+        voltage = -abs(voltage)
+    elif rail['rs_low'] is not None:
+        rs_low = rail['rs_low']
+        if rail['gpio_sensitive']:
+            gpio3b5_set(0)
+            raw_low = read_shunt_raw(addr)
+            current_low = calc_current_ma(raw_low, rs_low)
+            current_ma = current_low
+            gain_mode = 'GPIO3B5=0 / 0.2Ω'
+            if abs(raw_low) < 0x1000 or abs(current_low) < 50.0:
+                gpio3b5_set(1)
+                raw_high = read_shunt_raw(addr)
+                if raw_high >= 0x7000:
+                    status = '高增益饱和'
+                    note = 'GPIO3B5=1 时分流寄存器接近满量程，已回退低增益结果'
+                else:
+                    current_ma = calc_current_ma(raw_high, 1.2)
+                    gain_mode = 'GPIO3B5=1 / 1.2Ω'
+                    status = '高增益测量'
+            power_mw = abs(voltage) * abs(current_ma)
+        else:
+            raw = read_shunt_raw(addr)
+            current_ma = calc_current_ma(raw, rs_low)
+            power_mw = abs(voltage) * abs(current_ma)
+            gain_mode = f'固定采样 / {rs_low}Ω'
+
+    if power_mw is not None:
+        total += power_mw
+
+    results.append({
+        'name': name,
+        'addr': f'0x{addr:02X}',
+        'voltage': round(voltage, 6),
+        'current_ma': None if current_ma is None else round(current_ma, 3),
+        'power_mw': None if power_mw is None else round(power_mw, 3),
+        'status': status,
+        'gain_mode': gain_mode,
+        'note': note,
+    })
+
+print(json.dumps({'rails': results, 'total_power_mw': round(total, 3)}, ensure_ascii=False))
+"#;
+
+    let shell = framebuffer_python_script(script);
+    match adb_shell_internal(&state, &shell) {
+        Ok(result) if result.success => {
+            let text = result.output.trim();
+            let json_line = text.lines().last().unwrap_or(text);
+            match serde_json::from_str::<serde_json::Value>(json_line) {
+                Ok(value) => {
+                    let rails: Vec<PowerRailReading> = serde_json::from_value(value.get("rails").cloned().unwrap_or(serde_json::Value::Array(vec![]))).unwrap_or_default();
+                    let total_power_mw = value.get("total_power_mw").and_then(|v| v.as_f64());
+                    PowerRailsResult { success: true, rails, total_power_mw, error: None }
+                }
+                Err(e) => PowerRailsResult { success: false, rails: vec![], total_power_mw: None, error: Some(format!("解析电源检测结果失败: {} | 原始输出: {}", e, text)) }
+            }
+        }
+        Ok(result) => PowerRailsResult { success: false, rails: vec![], total_power_mw: None, error: result.error.or(Some(result.output)) },
+        Err(error) => PowerRailsResult { success: false, rails: vec![], total_power_mw: None, error: Some(error) },
+    }
+}
+
+#[tauri::command]
 fn run_demo_screen(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
     run_remote_python_script(
         &state,
@@ -934,6 +1169,36 @@ fn run_poster_demo(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult
         "/data/local/tmp/fb_text_poster.py",
         &[],
     )
+}
+
+#[tauri::command]
+fn run_logic_pattern(request: LogicPatternRequest, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
+    if request.pattern > 39 {
+        return PatternResult {
+            success: false,
+            message: String::new(),
+            error: Some("逻辑图案编号必须在 0-39 之间".to_string()),
+        };
+    }
+
+    let command = format!("python3 /vismm/fbshow/logicPictureShow.py {}", request.pattern);
+    match adb_shell_internal(&state, &command) {
+        Ok(result) if result.success => PatternResult {
+            success: true,
+            message: format!("已显示逻辑图案 {}", request.pattern),
+            error: None,
+        },
+        Ok(result) => PatternResult {
+            success: false,
+            message: result.output,
+            error: result.error,
+        },
+        Err(error) => PatternResult {
+            success: false,
+            message: String::new(),
+            error: Some(error),
+        },
+    }
 }
 
 #[tauri::command]
@@ -1138,9 +1403,13 @@ pub fn run() {
             display_gradient,
             display_color_bar,
             display_checkerboard,
+            sync_runtime_patterns,
+            run_runtime_pattern,
+            read_power_rails,
             run_demo_screen,
             run_text_demo,
             run_poster_demo,
+            run_logic_pattern,
             display_text,
             display_image,
             mipi_send_command,

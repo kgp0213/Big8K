@@ -88,8 +88,51 @@ const defaultTiming: TimingConfig = {
 
 const grayButtons = [16, 32, 64, 128, 192, 224];
 
+const logicPatternOptions = [
+  { value: 0, label: "0 - 垂直 ColorBar" },
+  { value: 1, label: "1 - 水平 ColorBar" },
+  { value: 2, label: "2 - 横向 256 渐变 1" },
+  { value: 3, label: "3 - 横向 256 渐变 2" },
+  { value: 4, label: "4 - 竖向 256 渐变 1" },
+  { value: 5, label: "5 - 竖向 256 渐变 2" },
+  { value: 6, label: "6 - 横向 ColorBar + 256 渐变 1" },
+  { value: 7, label: "7 - 横向 ColorBar + 256 渐变 2" },
+  { value: 8, label: "8 - 竖向 ColorBar + 256 渐变 1" },
+  { value: 9, label: "9 - 竖向 ColorBar + 256 渐变 2" },
+  { value: 10, label: "10 - 黑底白边框" },
+  { value: 11, label: "11 - Crosstalk 1" },
+  { value: 12, label: "12 - Crosstalk 2" },
+  { value: 13, label: "13 - Crosstalk 3" },
+  { value: 14, label: "14 - Crosstalk 4" },
+  { value: 15, label: "15 - 1Dot Inversion" },
+  { value: 16, label: "16 - 棋盘格 1" },
+  { value: 17, label: "17 - 棋盘格 2" },
+  { value: 18, label: "18 - 棋盘格 3" },
+  { value: 19, label: "19 - 棋盘格 4" },
+  { value: 20, label: "20 - 蓝 256 渐变" },
+  { value: 21, label: "21 - 绿 256 渐变" },
+  { value: 22, label: "22 - 红 256 渐变" },
+  { value: 23, label: "23 - 正方向 F 字" },
+  { value: 24, label: "24 - 线条" },
+  { value: 25, label: "25 - 圆形" },
+  { value: 26, label: "26 - 放射灰阶" },
+  { value: 27, label: "27 - 255 灰阶" },
+  { value: 28, label: "28 - 128 灰阶" },
+  { value: 29, label: "29 - 64 灰阶" },
+  { value: 30, label: "30 - 32 灰阶" },
+  { value: 31, label: "31 - 16 灰阶" },
+  { value: 32, label: "32 - 黑屏" },
+  { value: 33, label: "33 - 单黑线" },
+  { value: 34, label: "34 - 炫彩 1" },
+  { value: 35, label: "35 - 炫彩 2" },
+  { value: 36, label: "36 - 炫彩 3" },
+  { value: 37, label: "37 - 炫彩 4" },
+  { value: 38, label: "38 - 黑白 1" },
+  { value: 39, label: "39 - 255 灰阶（备用）" },
+];
+
 export default function MipiTab() {
-  const { appendLog } = useConnection();
+  const { appendLog, debugMode } = useConnection();
   const [driverCode, setDriverCode] = useState<string[]>([
     "05 00 01 28",
     "05 00 01 10",
@@ -112,6 +155,7 @@ export default function MipiTab() {
   ].join("\n"));
   const [timing, setTiming] = useState<TimingConfig>(defaultTiming);
   const [showBasicSection, setShowBasicSection] = useState(true);
+  const [selectedLogicPattern, setSelectedLogicPattern] = useState(0);
 
   const updateTiming = <K extends keyof TimingConfig>(key: K, value: TimingConfig[K]) => {
     setTiming((prev) => ({ ...prev, [key]: value }));
@@ -356,7 +400,10 @@ export default function MipiTab() {
         return;
       }
 
-      appendLog(`代码下发开始：共 ${commands.length} 行`, "info");
+      appendLog(`任务开始 -> 初始化代码下发（共 ${commands.length} 行）`, "info");
+      if (debugMode) {
+        commands.forEach((command) => appendLog(`-> adb shell vismpwr ${command}`, "debug"));
+      }
       const result = await tauriInvoke<CommandResult>("mipi_send_commands", { commands });
       if (result.success) {
         appendLog(result.output || `代码下发完成：共 ${commands.length} 行`, "success");
@@ -369,12 +416,16 @@ export default function MipiTab() {
   };
 
   const handleSolidColor = async (color: string, label: string) => {
+    appendLog(`显示画面 -> ${label}`, "info");
+    if (debugMode) {
+      appendLog(`-> adb shell python3 /vismm/fbshow/big8k_runtime/render_patterns.py pure_${color}`, "debug");
+    }
     try {
-      const result = await tauriInvoke<PatternResult>("display_solid_color", { color });
+      const result = await tauriInvoke<PatternResult>("run_runtime_pattern", { request: { pattern: `pure_${color}` } });
       if (result.success) {
-        appendLog(result.message || `已显示${label}`, "success");
+        appendLog(`显示完成 -> ${label}`, "success");
       } else {
-        appendLog(result.error || result.message || `显示${label}失败`, "error");
+        appendLog(result.error || result.message || `显示失败 -> ${label}`, "error");
       }
     } catch (e) {
       appendLog(`调用失败: ${String(e)}`, "error");
@@ -382,12 +433,17 @@ export default function MipiTab() {
   };
 
   const handleGray = async (value: number) => {
-    const color = `gray${value}`;
-    const result = await tauriInvoke<PatternResult>("display_solid_color", { color });
+    appendLog(`显示画面 -> 灰阶 ${value}`, "info");
+    if (debugMode) {
+      appendLog(`-> adb shell python3 /vismm/fbshow/logicPictureShow.py ${value === 16 ? 31 : value === 32 ? 30 : value === 64 ? 29 : value === 128 ? 28 : 27}`, "debug");
+    }
+    const patternMap: Record<number, number> = { 16: 31, 32: 30, 64: 29, 128: 28, 192: 27, 224: 27 };
+    const pattern = patternMap[value] ?? 27;
+    const result = await tauriInvoke<PatternResult>("run_logic_pattern", { request: { pattern } });
     if (result.success) {
-      appendLog(result.message || `已显示灰阶 ${value}`, "success");
+      appendLog(`显示完成 -> 灰阶 ${value}`, "success");
     } else {
-      appendLog(result.error || result.message || `灰阶 ${value} 显示失败`, "error");
+      appendLog(result.error || result.message || `显示失败 -> 灰阶 ${value}`, "error");
     }
   };
 
@@ -420,8 +476,10 @@ export default function MipiTab() {
   };
 
   const handleSoftwareReset = async () => {
-    appendLog("执行 Software Reset (01)", "info");
-    appendLog("ADB 命令: adb shell vismpwr 05 00 01 01", "info");
+    appendLog("任务开始 -> Software Reset (01)", "info");
+    if (debugMode) {
+      appendLog("-> adb shell vismpwr 05 00 01 01", "debug");
+    }
     try {
       const result = await tauriInvoke<CommandResult>("mipi_software_reset");
       if (result.success) {
@@ -449,18 +507,40 @@ export default function MipiTab() {
   };
 
   const handleGrayPattern = async () => {
-    appendLog("显示灰阶画面", "info");
+    appendLog("显示画面 -> 灰阶渐变", "info");
+    if (debugMode) {
+      appendLog("-> adb shell python3 /vismm/fbshow/big8k_runtime/render_patterns.py gray_gradient", "debug");
+    }
     try {
-      const result = await tauriInvoke<PatternResult>("display_gradient", { gradientType: "gray" });
+      const result = await tauriInvoke<PatternResult>("run_runtime_pattern", { request: { pattern: "gray_gradient" } });
       if (result.success) {
-        appendLog(result.message || "已显示灰阶画面", "success");
+        appendLog("显示完成 -> 灰阶渐变", "success");
       } else {
-        appendLog(result.error || result.message || "显示灰阶画面失败", "error");
+        appendLog(result.error || result.message || "显示失败 -> 灰阶渐变", "error");
       }
     } catch (e) {
       appendLog(`调用灰阶画面失败: ${String(e)}`, "error");
     }
   };
+
+  const showLogicPattern = async (pattern: number) => {
+    const current = logicPatternOptions.find((item) => item.value === pattern);
+    appendLog(`显示逻辑图 -> ${current?.label || pattern}`, "info");
+    if (debugMode) {
+      appendLog(`-> adb shell python3 /vismm/fbshow/logicPictureShow.py ${pattern}`, "debug");
+    }
+    try {
+      const result = await tauriInvoke<PatternResult>("run_logic_pattern", { request: { pattern } });
+      if (result.success) {
+        appendLog(result.message || `已显示逻辑图案 ${pattern}`, "success");
+      } else {
+        appendLog(result.error || result.message || `逻辑图案 ${pattern} 显示失败`, "error");
+      }
+    } catch (e) {
+      appendLog(`调用逻辑图案失败: ${String(e)}`, "error");
+    }
+  };
+
 
   const timingField = (label: string, key: keyof TimingConfig, type: "number" | "text" = "number") => (
     <div>
@@ -766,6 +846,27 @@ export default function MipiTab() {
                     <button onClick={handleSleepOut} className="btn-secondary text-sm py-1.5">开屏 (11 / 29)</button>
                     <button onClick={handleSoftwareReset} className="btn-secondary text-sm py-1.5">Software Reset (01)</button>
                     <button onClick={handleReadStatus} className="btn-secondary text-sm py-1.5">读取状态 (0A)</button>
+                  </div>
+                  <div className="space-y-2 border-t border-gray-200 dark:border-gray-700 pt-3">
+                    <div className="text-xs text-gray-500 dark:text-gray-400">逻辑测试图（选中即显示）</div>
+                    <div className="flex items-center">
+                      <select
+                        value={selectedLogicPattern}
+                        onChange={async (e) => {
+                          const next = Number(e.target.value);
+                          setSelectedLogicPattern(next);
+                          await showLogicPattern(next);
+                        }}
+                        className="input text-sm flex-1"
+                        title="选中后立即显示"
+                      >
+                        {logicPatternOptions.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
               </div>
