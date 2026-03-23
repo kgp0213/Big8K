@@ -910,7 +910,7 @@ print('OK')"#,
 fn run_demo_screen(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
     run_remote_python_script(
         &state,
-        &project_file("fb_demo.py"),
+        &project_file("python/fb_demo.py"),
         "/data/local/tmp/fb_demo.py",
         &[],
     )
@@ -920,7 +920,7 @@ fn run_demo_screen(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult
 fn run_text_demo(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
     run_remote_python_script(
         &state,
-        &project_file("fb_text_demo.py"),
+        &project_file("python/fb_text_demo.py"),
         "/data/local/tmp/fb_text_demo.py",
         &[],
     )
@@ -930,7 +930,7 @@ fn run_text_demo(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
 fn run_poster_demo(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
     run_remote_python_script(
         &state,
-        &project_file("fb_text_poster.py"),
+        &project_file("python/fb_text_poster.py"),
         "/data/local/tmp/fb_text_poster.py",
         &[],
     )
@@ -952,7 +952,7 @@ fn display_text(request: TextDisplayRequest, state: tauri::State<Mutex<Connectio
 
     run_remote_python_script(
         &state,
-        &project_file("fb_text_custom.py"),
+        &project_file("python/fb_text_custom.py"),
         "/data/local/tmp/fb_text_custom.py",
         &[
             &shell_quote(text),
@@ -1001,7 +1001,7 @@ fn display_image(request: ImageDisplayRequest, state: tauri::State<Mutex<Connect
 
     run_remote_python_script(
         &state,
-        &project_file("fb_image_display.py"),
+        &project_file("python/fb_image_display.py"),
         "/data/local/tmp/fb_image_display.py",
         &[remote_image],
     )

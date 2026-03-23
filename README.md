@@ -148,6 +148,7 @@ Big8K Tauri UI 是 8K OLED 点屏平台的新一代上位机界面，基于 **Ta
 - 临时调试 probe
 - 过程记录型日志文件
 - Tauri 自动生成的 schema / 辅助描述文件
+- 放在本地 `examples/` 中的临时测试文件
 
 这类文件统一建议放在开发机本地 `examples/` 目录中，便于自用，但不影响别人拿到源码后直接编译。
 
@@ -177,11 +178,13 @@ Big8K-Tauri-UI/
 │  └─ src/
 │     ├─ main.rs
 │     └─ lib.rs
-├─ fb_demo.py
-├─ fb_text_demo.py
-├─ fb_text_poster.py
-├─ fb_text_custom.py
-├─ fb_image_display.py
+├─ python/
+│  ├─ fb_demo.py
+│  ├─ fb_text_demo.py
+│  ├─ fb_text_poster.py
+│  ├─ fb_text_custom.py
+│  └─ fb_image_display.py
+├─ examples/                # 本地临时测试文件，不纳入仓库
 ├─ package.json
 └─ README.md
 ```
