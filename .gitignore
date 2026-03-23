@@ -21,6 +21,9 @@ Thumbs.db
 # Local-only examples / scratch files
 examples/
 
+# Generated helper files that are not required to build from source
+src-tauri/gen/
+
 # Rust / Tauri local lock and debug artifacts
 src-tauri/.cargo-lock
 
