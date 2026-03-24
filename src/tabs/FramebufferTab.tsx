@@ -275,9 +275,15 @@ export default function FramebufferTab() {
     );
   };
 
-  const handleDisplayImage = async () => {
+  const handleDisplayImage = async (targetPath?: string) => {
+    const pathToUse = (targetPath || imagePath).trim();
+    if (!pathToUse) {
+      showMessage("error", "请先选择一张图片");
+      return;
+    }
+
     if (debugMode) {
-      appendLog(`-> adb push \"${imagePath}\" /data/local/tmp/selected_image`, "debug");
+      appendLog(`-> adb push \"${pathToUse}\" /data/local/tmp/selected_image`, "debug");
       appendLog(`-> adb push python/fb_image_display.py /data/local/tmp/fb_image_display.py`, "debug");
       appendLog(`-> adb shell python3 /data/local/tmp/fb_image_display.py /data/local/tmp/selected_image`, "debug");
     }
@@ -285,7 +291,7 @@ export default function FramebufferTab() {
       "display_image",
       {
         request: {
-          image_path: imagePath,
+          image_path: pathToUse,
         },
       },
       "display_image",
@@ -295,6 +301,13 @@ export default function FramebufferTab() {
 
   const handleChooseImageFolder = () => {
     fileInputRef.current?.click();
+  };
+
+  const isResolutionMatched = (item: LocalImageEntry) => {
+    if (!currentResolution || !item.width || !item.height) {
+      return false;
+    }
+    return item.width === currentResolution.width && item.height === currentResolution.height;
   };
 
   const handleImageSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -536,14 +549,21 @@ export default function FramebufferTab() {
                           <div className="grid grid-cols-3 gap-3">
                             {filteredFolderImages.map((item) => {
                               const selected = item.path === imagePath;
+                              const matched = isResolutionMatched(item);
                               return (
                                 <button
                                   key={item.id}
                                   onClick={() => setImagePath(item.path)}
+                                  onDoubleClick={() => {
+                                    setImagePath(item.path);
+                                    void handleDisplayImage(item.path);
+                                  }}
                                   className={`group text-left rounded-xl border transition-all overflow-hidden ${
                                     selected
                                       ? "border-primary-500 ring-2 ring-primary-300/60 dark:ring-primary-700/40 bg-primary-50/70 dark:bg-primary-900/20"
-                                      : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 hover:border-primary-300 dark:hover:border-primary-700"
+                                      : matched
+                                        ? "border-emerald-300 dark:border-emerald-700 bg-white dark:bg-gray-900/30 hover:border-emerald-400 dark:hover:border-emerald-600"
+                                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 hover:border-primary-300 dark:hover:border-primary-700"
                                   }`}
                                   title={item.path}
                                 >
@@ -559,11 +579,17 @@ export default function FramebufferTab() {
                                       </div>
                                     )}
                                   </div>
-                                  <div className="p-2.5 space-y-1">
+                                  <div className="p-2.5 space-y-1.5">
                                     <div className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{item.name}</div>
                                     <div className="flex items-center justify-between gap-2 text-[11px] text-gray-400">
                                       <span className="uppercase tracking-wide">{item.ext.replace(".", "")}</span>
                                       <span>{item.width && item.height ? `${item.width}×${item.height}` : "未读取尺寸"}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className={`text-[11px] px-2 py-0.5 rounded-full ${matched ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>
+                                        {matched ? "分辨率匹配" : "分辨率未匹配"}
+                                      </span>
+                                      <span className="text-[11px] text-gray-400">双击可直接显示</span>
                                     </div>
                                   </div>
                                 </button>
@@ -574,18 +600,25 @@ export default function FramebufferTab() {
                           <div className="space-y-2">
                             {filteredFolderImages.map((item) => {
                               const selected = item.path === imagePath;
+                              const matched = isResolutionMatched(item);
                               return (
                                 <button
                                   key={item.id}
                                   onClick={() => setImagePath(item.path)}
+                                  onDoubleClick={() => {
+                                    setImagePath(item.path);
+                                    void handleDisplayImage(item.path);
+                                  }}
                                   className={`w-full text-left rounded-xl border px-3 py-2 transition-all ${
                                     selected
                                       ? "border-primary-500 ring-2 ring-primary-300/60 dark:ring-primary-700/40 bg-primary-50/70 dark:bg-primary-900/20"
-                                      : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 hover:border-primary-300 dark:hover:border-primary-700"
+                                      : matched
+                                        ? "border-emerald-300 dark:border-emerald-700 bg-white dark:bg-gray-900/30 hover:border-emerald-400 dark:hover:border-emerald-600"
+                                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 hover:border-primary-300 dark:hover:border-primary-700"
                                   }`}
                                   title={item.path}
                                 >
-                                  <div className="grid grid-cols-[minmax(0,1fr)_120px_90px] gap-3 items-center">
+                                  <div className="grid grid-cols-[minmax(0,1fr)_120px_90px_110px] gap-3 items-center">
                                     <div className="min-w-0">
                                       <div className="flex items-center gap-2">
                                         <span className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{item.name}</span>
@@ -597,6 +630,11 @@ export default function FramebufferTab() {
                                       {item.width && item.height ? `${item.width} × ${item.height}` : "未读取尺寸"}
                                     </div>
                                     <div className="text-xs uppercase tracking-wide text-gray-400 text-center">{item.ext.replace(".", "")}</div>
+                                    <div className="text-center">
+                                      <span className={`text-[11px] px-2 py-0.5 rounded-full ${matched ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>
+                                        {matched ? "已匹配" : "未匹配"}
+                                      </span>
+                                    </div>
                                   </div>
                                 </button>
                               );
@@ -615,7 +653,7 @@ export default function FramebufferTab() {
                       </div>
                     </div>
                     <div className="flex flex-col gap-2">
-                      <button onClick={handleDisplayImage} disabled={!isConnected || loading === "display_image" || !imagePath.trim()} className="btn-primary flex items-center justify-center gap-2">
+                      <button onClick={() => void handleDisplayImage()} disabled={!isConnected || loading === "display_image" || !imagePath.trim()} className="btn-primary flex items-center justify-center gap-2">
                         {loading === "display_image" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                         上传并显示
                       </button>
@@ -627,7 +665,8 @@ export default function FramebufferTab() {
                     <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-3 text-xs text-gray-500 dark:text-gray-400 space-y-1">
                       <div>· 支持 bmp / png / jpg / jpeg / webp</div>
                       <div>· 图片很多时可用搜索框快速筛选</div>
-                      <div>· 当前列表只做轻量浏览，不加载本地缩略图，避免卡顿</div>
+                      <div>· 绿色标签表示与当前设备分辨率匹配</div>
+                      <div>· 双击图片可直接上传并显示</div>
                     </div>
                   </div>
                 </div>
