@@ -1,3 +1,5 @@
+import type { RefObject } from "react";
+
 type LogEntry = { id: string; time: string; level: "info" | "success" | "warning" | "error" | "debug"; message: string };
 
 type Props = {
@@ -5,7 +7,7 @@ type Props = {
   debugMode: boolean;
   onDebugModeChange: (value: boolean) => void;
   onClearLogs: () => void;
-  logContainerRef: React.RefObject<HTMLDivElement | null>;
+  logContainerRef: RefObject<HTMLDivElement | null>;
 };
 
 export default function LogPanel({ logs, debugMode, onDebugModeChange, onClearLogs, logContainerRef }: Props) {
@@ -24,7 +26,7 @@ export default function LogPanel({ logs, debugMode, onDebugModeChange, onClearLo
         </button>
       </div>
       <div className="panel-body">
-        <div ref={logContainerRef} className="space-y-1 overflow-auto max-h-56 text-xs">
+        <div ref={logContainerRef as RefObject<HTMLDivElement>} className="space-y-1 overflow-auto max-h-56 text-xs">
           {logs.length === 0 ? (
             <div className="text-gray-400">暂无日志，后续 ADB / SSH / 屏幕操作会显示在这里。</div>
           ) : (

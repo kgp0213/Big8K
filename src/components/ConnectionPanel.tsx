@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Activity, MonitorSmartphone } from "lucide-react";
+import { Activity, MonitorSmartphone, Usb, Wifi } from "lucide-react";
 import { useConnection } from "../App";
 import { tauriInvoke } from "../utils/tauri";
 import { LAST_SUCCESSFUL_SSH_IP_KEY, SSH_ENDPOINTS } from "../features/connection/constants";
