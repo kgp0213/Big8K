@@ -272,7 +272,23 @@ cargo --version
 - ADB 相关能力不受影响
 - 调用 SSH 连接或 SSH 执行命令时，会返回“当前构建未启用 SSH 功能”
 
-### 6.7 如何在编译时启用 SSH
+### 6.7 关于 OLED 配置 bin 的命名说明
+
+为避免歧义，仓库里和界面里凡是指向这类面板时序/初始化二进制配置文件的地方，推荐统一理解为：
+
+- **OLED config bin**
+- **OLED 配置 bin**
+
+这里不再推荐使用“LCD bin”这种说法，因为当前项目面向的是 OLED 点屏调试场景，用 OLED config bin 更准确。
+
+当前对应操作主要包括：
+
+- 打开 OLED 配置
+- 加载历史 OLED 配置
+- 导出 OLED 配置
+- 根据当前 Timing / 初始化代码生成 OLED config bin
+
+### 6.8 如何在编译时启用 SSH
 
 如果你需要真正使用 SSH 连接板卡，请在 Rust / Tauri 构建阶段显式带上 `ssh` feature。
 
@@ -457,7 +473,7 @@ npm run tauri build
    - 屏幕分辨率
    - 位深
 4. 再进入：
-   - `点屏配置`
+   - `OLED 配置`
    - `显示画面`
 5. 做具体测试
 

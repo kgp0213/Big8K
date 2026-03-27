@@ -17,15 +17,26 @@ Thumbs.db
 
 # Logs
 *.log
+*.txt
 
 # Local-only examples / scratch files
 examples/
+python/debug_cache_pull/
+python/debug_cache_pull2/
 
 # Generated helper files that are not required to build from source
 src-tauri/gen/
+src-tauri/*.txt
+src-tauri/*.json
 
 # Rust / Tauri local lock and debug artifacts
 src-tauri/.cargo-lock
+
+# Local binaries / scratch verification outputs
+verify_bin.exe
+verify_bin.pdb
+test_*.bin
+vite_run.log
 
 # Local env
 .env
