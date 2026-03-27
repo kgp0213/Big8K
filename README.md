@@ -542,9 +542,8 @@ npm run tauri build
 
 - `DebugTab`
 - `NetworkTab`
-- `ScriptTab`
-- `GpioTab`
-- `I2CTab`
+- 更完整的功能拆分与继续模块化整理
+- 旧版外设调试能力按需要逐步迁移
 
 ## 12. 最小可用编译步骤（给新拿到源码的人）
 
@@ -569,7 +568,7 @@ cargo build --release --bin Big8K
 
 1. 把 `显示画面` 里的 Demo 脚本全部统一成按真实分辨率生成
 2. 继续把旧版 PC-SW 的关键流程做迁移映射
-3. 给 `DebugTab / NetworkTab / ScriptTab` 接入真实后端逻辑
+3. 给 `DebugTab / NetworkTab / 其他待迁移功能页` 接入真实后端逻辑
 4. 梳理旧版工程中的板端工具、脚本和资源哪些需要纳入新仓库
 
 ---

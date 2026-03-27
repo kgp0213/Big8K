@@ -1,49 +1,15 @@
 import { useState, createContext, useContext, useEffect, useMemo } from "react";
-import { Monitor, Terminal, Image, Cpu, Wifi, FileCode, Activity, Moon, Sun, Home } from "lucide-react";
+import { Monitor, Moon, Sun } from "lucide-react";
 import ConnectionPanel from "./components/ConnectionPanel";
 import HomeTab from "./tabs/HomeTab";
 import StatusBar from "./components/StatusBar";
 import MipiTab from "./tabs/MipiTab";
 import FramebufferTab from "./tabs/FramebufferTab";
-import I2CTab from "./tabs/I2CTab";
-import GpioTab from "./tabs/GpioTab";
-import ScriptTab from "./tabs/ScriptTab";
+import PowerRailsTab from "./tabs/PowerRailsTab";
 import NetworkTab from "./tabs/NetworkTab";
 import DebugTab from "./tabs/DebugTab";
-
-type TabType = "home" | "mipi" | "fb" | "i2c" | "gpio" | "script" | "network" | "debug";
-type ConnectionType = "adb" | "ssh" | "disconnected";
-type LogLevel = "info" | "success" | "warning" | "error" | "debug";
-
-interface ConnectionStatus {
-  type: ConnectionType;
-  deviceId?: string;
-  ip?: string;
-  connected: boolean;
-  screenResolution?: string;
-  bitsPerPixel?: string;
-  deviceModel?: string;
-  fb0Available?: boolean;
-  vismpwrAvailable?: boolean;
-  python3Available?: boolean;
-}
-
-interface LogEntry {
-  id: string;
-  time: string;
-  level: LogLevel;
-  message: string;
-}
-
-interface ConnectionContextType {
-  connection: ConnectionStatus;
-  setConnection: (conn: ConnectionStatus) => void;
-  logs: LogEntry[];
-  appendLog: (message: string, level?: LogLevel) => void;
-  clearLogs: () => void;
-  debugMode: boolean;
-  setDebugMode: (value: boolean) => void;
-}
+import { tabs } from "./features/app/tabs";
+import type { ConnectionContextType, ConnectionStatus, LogEntry, LogLevel, TabType } from "./features/app/types";
 
 export const ConnectionContext = createContext<ConnectionContextType>({
   connection: { type: "disconnected", connected: false },
@@ -56,17 +22,6 @@ export const ConnectionContext = createContext<ConnectionContextType>({
 });
 
 export const useConnection = () => useContext(ConnectionContext);
-
-const tabs = [
-  { id: "mipi" as TabType, label: "点屏配置", icon: Monitor },
-  { id: "fb" as TabType, label: "显示画面", icon: Image },
-  { id: "debug" as TabType, label: "命令调试", icon: Terminal },
-  { id: "i2c" as TabType, label: "I2C/GPIO", icon: Cpu },
-  { id: "gpio" as TabType, label: "代码转换", icon: Activity },
-  { id: "script" as TabType, label: "脚本管理", icon: FileCode },
-  { id: "network" as TabType, label: "网络配置", icon: Wifi },
-  { id: "home" as TabType, label: "总览", icon: Home },
-];
 
 function App() {
   const DESIGN_WIDTH = 1500;
@@ -127,12 +82,8 @@ function App() {
         return <MipiTab />;
       case "fb":
         return <FramebufferTab />;
-      case "i2c":
-        return <I2CTab />;
-      case "gpio":
-        return <GpioTab />;
-      case "script":
-        return <ScriptTab />;
+      case "power":
+        return <PowerRailsTab />;
       case "network":
         return <NetworkTab />;
       case "debug":
@@ -177,18 +128,22 @@ function App() {
                   {tabs.map((tab) => {
                     const Icon = tab.icon;
                     return (
-                      <button
-                        key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
-                        className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors ${
-                          activeTab === tab.id
-                            ? "bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400 border-r-2 border-primary-600 dark:border-primary-400"
-                            : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"
-                        }`}
-                      >
-                        <Icon className="w-5 h-5" />
-                        {tab.label}
-                      </button>
+                      <div key={tab.id}>
+                        {tab.id === "fb" && (
+                          <div className="mx-4 my-2 border-t border-gray-200/80 dark:border-gray-700/80" />
+                        )}
+                        <button
+                          onClick={() => setActiveTab(tab.id)}
+                          className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors ${
+                            activeTab === tab.id
+                              ? "bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400 border-r-2 border-primary-600 dark:border-primary-400"
+                              : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"
+                          }`}
+                        >
+                          <Icon className="w-5 h-5" />
+                          {tab.label}
+                        </button>
+                      </div>
                     );
                   })}
                 </div>

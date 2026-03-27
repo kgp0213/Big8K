@@ -30,7 +30,7 @@ export default function RecentConfigMenu({
       {showRecentConfigs && (
         <div className="absolute top-full left-0 mt-0 z-20 w-[760px] max-h-80 overflow-auto rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl p-2">
           {recentConfigs.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">暂无历史点屏配置</div>
+            <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">暂无历史 OLED 配置</div>
           ) : (
             recentConfigs.map((item) => {
               const parts = item.path.split(/[/\\]/);
