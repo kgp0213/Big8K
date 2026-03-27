@@ -247,27 +247,56 @@ cargo --version
 - 若使用 MIPI 相关指令，下位机侧需要存在：
   - `vismpwr`
 
-### 6.6 关于仓库中的默认 SSH 账号口令
+### 6.6 SSH 改为真正按需启用
 
-当前源码里保留了一组用于快速联调的默认 SSH 用户名/密码，用于让开发人员在内网测试板卡时减少重复输入。
+当前仓库的 Rust 后端已把 SSH 能力做成 **可选 feature**：
 
-请明确把它理解为：
+- 默认构建 **不包含 SSH**
+- 只有在明确需要时才在编译阶段启用 SSH
 
-- **示例默认值**
-- **仅限内网测试环境**
-- **不适合作为公开环境、生产环境或长期固定凭据**
+对应配置见：
 
-如果你要把本项目用于更正式的环境，建议至少做下面几件事：
+- `src-tauri/Cargo.toml`
+  - `ssh2 = { version = "0.9", optional = true }`
+  - `ssh = ["dep:ssh2"]`
 
-1. 不再使用默认口令
-2. 改成你自己的板卡账号/密码
-3. 更进一步可改为：
-   - 本地配置文件读取
-   - 环境变量注入
-   - 首次运行时输入
-   - UI 中手动录入但不入库
+这样做的目的主要是：
 
-如果这个仓库未来长期公开，推荐后续把默认 SSH 口令从前端源码中移除，改成外部配置。
+- 减少默认构建依赖
+- 避免不需要 SSH 的环境额外处理相关 native 依赖
+- 让“只做 ADB / 点屏 / framebuffer 调试”的场景编译更直接
+
+如果你在**未启用 SSH feature** 的情况下运行程序：
+
+- 界面仍可正常启动
+- ADB 相关能力不受影响
+- 调用 SSH 连接或 SSH 执行命令时，会返回“当前构建未启用 SSH 功能”
+
+### 6.7 如何在编译时启用 SSH
+
+如果你需要真正使用 SSH 连接板卡，请在 `src-tauri` 目录下显式带 feature 编译。
+
+#### 开发调试（启用 SSH）
+
+```bash
+cd src-tauri
+cargo run --features ssh --bin Big8K
+```
+
+#### 生成 release 可执行文件（启用 SSH）
+
+```bash
+cd src-tauri
+cargo build --release --features ssh --bin Big8K
+```
+
+生成产物通常位于：
+
+```text
+src-tauri/target/release/Big8K.exe
+```
+
+如果你走 Tauri 的整套打包流程，也建议确保底层 Rust 构建阶段带上 `ssh` feature；否则打出来的包仍然是不含 SSH 能力的版本。
 
 ## 7. 安装依赖
 
