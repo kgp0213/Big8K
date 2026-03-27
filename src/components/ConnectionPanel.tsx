@@ -2,98 +2,9 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { Usb, Wifi, Activity, Power, RefreshCw, CheckCircle, XCircle, Link, Cpu, MonitorSmartphone } from "lucide-react";
 import { useConnection } from "../App";
 import { tauriInvoke } from "../utils/tauri";
-
-const DEFAULT_MIPI_LANES = 4;
-const DEFAULT_SCREEN_RESOLUTION = "未读取";
-const DEFAULT_MIPI_MODE = "Video";
-
-interface AdbDevice {
-  id: string;
-  status: string;
-  product?: string;
-  model?: string;
-  transport_id?: string;
-}
-
-interface AdbDevicesResult {
-  success: boolean;
-  devices: AdbDevice[];
-  error?: string;
-}
-
-interface ActionResult {
-  success: boolean;
-  output: string;
-  error?: string;
-}
-
-interface DeviceProbeResult {
-  success: boolean;
-  model?: string;
-  virtual_size?: string;
-  bits_per_pixel?: string;
-  fb0_available: boolean;
-  vismpwr_available: boolean;
-  python3_available: boolean;
-  error?: string;
-}
-
-interface ConnectionPanelProps {
-  logs: { id: string; time: string; level: "info" | "success" | "warning" | "error" | "debug"; message: string }[];
-  clearLogs: () => void;
-}
-
-const SSH_ENDPOINTS = [
-  { label: "192.168.137.100", host: "192.168.137.100" },
-  { label: "192.168.1.100", host: "192.168.1.100" },
-];
-
-const LAST_SUCCESSFUL_SSH_IP_KEY = "big8k.lastSuccessfulSshIp";
-
-const getAdbStatusLabel = (status: string) => {
-  switch (status) {
-    case "device":
-      return "已连接";
-    case "offline":
-      return "设备已连接但离线";
-    case "unauthorized":
-      return "设备未授权，请在设备上确认调试授权";
-    case "recovery":
-      return "设备处于 Recovery 模式";
-    case "sideload":
-      return "设备处于 Sideload 模式";
-    case "bootloader":
-      return "设备处于 Bootloader 模式";
-    default:
-      return status || "未知状态";
-  }
-};
-
-const getAdbStatusTone = (status: string) => {
-  switch (status) {
-    case "device":
-      return "success";
-    case "offline":
-    case "unauthorized":
-    case "recovery":
-    case "sideload":
-    case "bootloader":
-      return "warning";
-    default:
-      return "error";
-  }
-};
-
-const getAdbStatusBadgeClass = (status: string) => {
-  const tone = getAdbStatusTone(status);
-  if (tone === "success") {
-    return "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300";
-  }
-  if (tone === "warning") {
-    return "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300";
-  }
-  return "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300";
-};
+import { DEFAULT_SCREEN_RESOLUTION, LAST_SUCCESSFUL_SSH_IP_KEY, SSH_ENDPOINTS } from "../features/connection/constants";
+import { getAdbStatusBadgeClass, getAdbStatusLabel, getAdbStatusTone } from "../features/connection/helpers";
+import type { ActionResult, AdbDevice, AdbDevicesResult, ConnectionPanelProps, DeviceProbeResult } from "../features/connection/types";
 
 export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProps) {
   const { connection, setConnection, appendLog, debugMode, setDebugMode } = useConnection();
@@ -130,11 +41,11 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
   const selectedDeviceStatusLabel = useMemo(() => getAdbStatusLabel(selectedDevice?.status || ""), [selectedDevice]);
 
   const showMessage = (type: "success" | "error", text: string, silent = false) => {
-    setMessage({ type, text });
     if (!silent) {
+      setMessage({ type, text });
       appendLog(text, type === "success" ? "success" : "error");
+      window.setTimeout(() => setMessage(null), 3000);
     }
-    window.setTimeout(() => setMessage(null), 3000);
   };
 
   const syncSelectedDevice = async (selectedDeviceId: string) => {
@@ -167,11 +78,15 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
 
   const applyProbeToConnection = (probe: DeviceProbeResult, base: { type: "adb" | "ssh"; connected: boolean; deviceId?: string; ip?: string }) => {
     const resolution = probe.virtual_size ? probe.virtual_size.replace(/[x,]/i, " × ") : undefined;
+    const bitsPerPixel = probe.bits_per_pixel?.trim() === "32" ? undefined : probe.bits_per_pixel;
+    const deviceModel = probe.model?.trim() ? probe.model : undefined;
     setConnection({
       ...base,
       screenResolution: resolution,
-      bitsPerPixel: probe.bits_per_pixel,
-      deviceModel: probe.model,
+      bitsPerPixel,
+      deviceModel,
+      mipiMode: probe.mipi_mode,
+      mipiLanes: probe.mipi_lanes,
       fb0Available: probe.fb0_available,
       vismpwrAvailable: probe.vismpwr_available,
       python3Available: probe.python3_available,
@@ -202,7 +117,7 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
 
   const probeSshDevice = async (host: string, silent = false) => {
     try {
-      const command = "MODEL=$(getprop ro.product.model 2>/dev/null); VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null); BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null); [ -e /dev/fb0 ] && echo FB0=1 || echo FB0=0; command -v vismpwr >/dev/null 2>&1 && echo VISMPWR=1 || echo VISMPWR=0; command -v python3 >/dev/null 2>&1 && echo PYTHON3=1 || echo PYTHON3=0; echo MODEL=$MODEL; echo VSIZE=$VSIZE; echo BPP=$BPP";
+      const command = "MODEL=$(getprop ro.product.model 2>/dev/null); VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null); BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null); MIPI_MODE=$(dmesg 2>/dev/null | grep -iE 'video mode|cmd mode|command mode' | tail -n 1 | sed -n 's/.*\(video mode\|cmd mode\|command mode\).*/\\1/p'); LANES=$(dmesg 2>/dev/null | grep -ioE 'lane[s]?[=: ]+[0-9]+' | tail -n 1 | grep -ioE '[0-9]+' ); [ -e /dev/fb0 ] && echo FB0=1 || echo FB0=0; command -v vismpwr >/dev/null 2>&1 && echo VISMPWR=1 || echo VISMPWR=0; command -v python3 >/dev/null 2>&1 && echo PYTHON3=1 || echo PYTHON3=0; echo MODEL=$MODEL; echo VSIZE=$VSIZE; echo BPP=$BPP; echo MIPI_MODE=$MIPI_MODE; echo LANES=$LANES";
       if (debugMode && !silent) {
         appendLog(`-> ssh ${sshUser}@${host}:${sshPort} \"${command}\"`, "debug");
       }
@@ -227,11 +142,18 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
       let fb0Available = false;
       let vismpwrAvailable = false;
       let python3Available = false;
+      let mipiMode = "";
+      let mipiLanes: number | undefined;
 
       for (const line of lines) {
         if (line.startsWith("MODEL=")) model = line.slice(6).trim();
         else if (line.startsWith("VSIZE=")) virtualSize = line.slice(6).trim();
         else if (line.startsWith("BPP=")) bitsPerPixel = line.slice(4).trim();
+        else if (line.startsWith("MIPI_MODE=")) mipiMode = line.slice(10).trim();
+        else if (line.startsWith("LANES=")) {
+          const parsed = Number(line.slice(6).trim());
+          if (Number.isFinite(parsed) && parsed > 0) mipiLanes = parsed;
+        }
         else if (line.trim() === "FB0=1") fb0Available = true;
         else if (line.trim() === "VISMPWR=1") vismpwrAvailable = true;
         else if (line.trim() === "PYTHON3=1") python3Available = true;
@@ -242,8 +164,10 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
         ip: host,
         connected: true,
         screenResolution: virtualSize ? virtualSize.replace(/[x,]/i, " × ") : undefined,
-        bitsPerPixel,
+        bitsPerPixel: bitsPerPixel === "32" ? undefined : bitsPerPixel,
         deviceModel: model || undefined,
+        mipiMode: mipiMode || undefined,
+        mipiLanes,
         fb0Available,
         vismpwrAvailable,
         python3Available,
@@ -298,8 +222,6 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
 
         if (!silent) {
           if (devices.length > 0) {
-            const selected = devices.find((d) => d.id === deviceId) || devices[0];
-            showMessage("success", `ADB 已刷新：${selected.id} · ${getAdbStatusLabel(selected.status)}`, true);
             appendLog(`ADB 已刷新：发现 ${devices.length} 台设备`, "success");
           } else {
             showMessage("error", "未检测到 ADB 设备", true);
@@ -386,7 +308,6 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
     setDeviceId("");
     setDeviceList([]);
     setConnection({ type: "disconnected", connected: false });
-    showMessage("success", "已断开 ADB 连接");
   };
 
   const checkSshConnection = async () => {
@@ -560,12 +481,10 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
                   设备状态
                 </div>
                 <div>序列号：{selectedDevice.id}</div>
-                <div>ADB 状态：{selectedDeviceStatusLabel}</div>
-                <div>设备型号：{connection.deviceModel || "未读取"}</div>
+                {connection.deviceModel ? <div>设备型号：{connection.deviceModel}</div> : null}
                 <div>屏幕分辨率：{connection.screenResolution || DEFAULT_SCREEN_RESOLUTION}</div>
-                <div>位深：{connection.bitsPerPixel || "未读取"}</div>
-                <div>MIPI Mode：{DEFAULT_MIPI_MODE}</div>
-                <div>MIPI Lane：{DEFAULT_MIPI_LANES}</div>
+                {connection.bitsPerPixel ? <div>位深：{connection.bitsPerPixel}</div> : null}
+                <div>MIPI 类型：{connection.mipiMode || "未读取"}；MIPI Lane：{typeof connection.mipiLanes === "number" ? connection.mipiLanes : "未读取"}</div>
                 {selectedDevice.status === "unauthorized" && (
                   <div className="rounded-lg border border-yellow-300 bg-yellow-50 px-2 py-2 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-200">
                     请看一下设备屏幕，确认 USB 调试授权弹窗，然后手动点击刷新。

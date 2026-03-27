@@ -154,6 +154,8 @@ Big8K Tauri UI 是 8K OLED 点屏平台的新一代上位机界面，基于 **Ta
 
 ## 6. 目录结构
 
+当前目录结构已经从最早的“单页 + 若干 tab 文件”逐步整理为“tab 壳 + features 模块”。
+
 ```text
 Big8K-Tauri-UI/
 ├─ src/
@@ -163,15 +165,32 @@ Big8K-Tauri-UI/
 │  ├─ components/
 │  │  ├─ ConnectionPanel.tsx
 │  │  └─ StatusBar.tsx
-│  └─ tabs/
-│     ├─ HomeTab.tsx
-│     ├─ MipiTab.tsx
-│     ├─ FramebufferTab.tsx
-│     ├─ I2CTab.tsx
-│     ├─ GpioTab.tsx
-│     ├─ ScriptTab.tsx
-│     ├─ NetworkTab.tsx
-│     └─ DebugTab.tsx
+│  ├─ features/
+│  │  ├─ connection/
+│  │  │  ├─ constants.ts
+│  │  │  ├─ helpers.ts
+│  │  │  └─ types.ts
+│  │  ├─ mipi/
+│  │  │  ├─ actions.ts
+│  │  │  ├─ constants.ts
+│  │  │  ├─ storage.ts
+│  │  │  ├─ types.ts
+│  │  │  ├─ RecentConfigMenu.tsx
+│  │  │  ├─ TimingPanel.tsx
+│  │  │  ├─ DriverCodePanel.tsx
+│  │  │  └─ QuickActionsPanel.tsx
+│  │  ├─ debug/
+│  │  └─ code-convert/
+│  ├─ tabs/
+│  │  ├─ HomeTab.tsx
+│  │  ├─ MipiTab.tsx
+│  │  ├─ FramebufferTab.tsx
+│  │  ├─ PowerRailsTab.tsx
+│  │  ├─ NetworkTab.tsx
+│  │  └─ DebugTab.tsx
+│  └─ utils/
+│     ├─ tauri.ts
+│     └─ codeFormatter.ts
 ├─ src-tauri/
 │  ├─ Cargo.toml
 │  ├─ tauri.conf.json
@@ -182,12 +201,18 @@ Big8K-Tauri-UI/
 │  ├─ fb_demo.py
 │  ├─ fb_text_demo.py
 │  ├─ fb_text_poster.py
-│  ├─ fb_text_custom.py
-│  └─ fb_image_display.py
+│  ├─ runtime_fbshow/
+│  └─ ...
 ├─ examples/                # 本地临时测试文件，不纳入仓库
 ├─ package.json
 └─ README.md
 ```
+
+说明：
+
+- `tabs/` 更偏页面入口与布局编排
+- `features/` 用来承载具体功能模块的类型、动作、局部组件、存储逻辑
+- 当前已优先整理了 `mipi/` 和 `connection/`，后续可以继续按同样方式整理其他模块
 
 ## 6. 开发环境要求
 
