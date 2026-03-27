@@ -42,6 +42,7 @@ export const DEFAULT_DRIVER_CODE = [
 export const grayButtons = [16, 32, 64, 128, 192, 224];
 export const RECENT_LCD_CONFIGS_KEY = "big8k.recentLcdConfigs";
 export const LAST_LCD_CONFIG_KEY = "big8k.lastLcdConfig";
+export const MIPI_RIGHT_EDITOR_KEY = "big8k.mipi.rightEditor";
 export const MAX_RECENT_LCD_CONFIGS = 10;
 
 export const logicPatternOptions = [

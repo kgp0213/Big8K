@@ -94,9 +94,13 @@ def checkerboard(width, height, block=80):
 
 def radial_gray(width, height):
     y, x = np.ogrid[:height, :width]
-    min_dist = np.minimum.reduce([x, width - 1 - x, y, height - 1 - y]).astype(np.float32)
-    max_distance = max(min(width, height) / 2.0, 1.0)
-    gray = np.clip((min_dist / max_distance) * 255, 0, 255).astype(np.uint8)
+    cx = (width - 1) / 2.0
+    cy = (height - 1) / 2.0
+    dx = x.astype(np.float32) - np.float32(cx)
+    dy = y.astype(np.float32) - np.float32(cy)
+    dist = np.sqrt(dx * dx + dy * dy)
+    max_distance = max(float(np.sqrt(cx * cx + cy * cy)), 1.0)
+    gray = np.clip((1.0 - dist / max_distance) * 255.0, 0, 255).astype(np.uint8)
     arr = np.zeros((height, width, 4), dtype=np.uint8)
     arr[..., 0] = gray
     arr[..., 1] = gray
@@ -105,27 +109,54 @@ def radial_gray(width, height):
     return arr
 
 
-def logic_like_colorbar_gradient(width, height, horizontal=True, reverse=False):
+def colorful_1(width, height):
+    x = np.linspace(0.0, 1.0, width, dtype=np.float32)
+    y = np.linspace(0.0, 1.0, height, dtype=np.float32)[:, None]
     arr = np.zeros((height, width, 4), dtype=np.uint8)
-    bars = 6
+    arr[..., 2] = np.clip(255 * (0.5 + 0.5 * np.sin(2 * np.pi * (x * 1.0 + y * 0.35))), 0, 255).astype(np.uint8)
+    arr[..., 1] = np.clip(255 * (0.5 + 0.5 * np.sin(2 * np.pi * (x * 1.7 + y * 0.6) + 2.1)), 0, 255).astype(np.uint8)
+    arr[..., 0] = np.clip(255 * (0.5 + 0.5 * np.sin(2 * np.pi * (x * 2.3 + y * 0.9) + 4.2)), 0, 255).astype(np.uint8)
+    arr[..., 3] = 255
+    return arr
+
+
+def logic_like_colorbar_gradient(width, height, horizontal=True, reverse=False):
+    anchors = np.array([
+        [255, 0, 0],
+        [255, 255, 0],
+        [0, 255, 0],
+        [0, 255, 255],
+        [0, 0, 255],
+        [255, 0, 255],
+        [255, 0, 0],
+    ], dtype=np.float32)
+    arr = np.zeros((height, width, 4), dtype=np.uint8)
     if horizontal:
-        bar_width = max(width // bars, 1)
-        for i in range(bars):
-            start = i * bar_width
-            end = width if i == bars - 1 else min((i + 1) * bar_width, width)
-            grad = np.linspace(0, 255, max(end - start, 1), dtype=np.uint8)
-            if reverse:
-                grad = grad[::-1]
-            arr[:, start:end, i % 3] = grad[None, :]
+        axis = np.linspace(0, len(anchors) - 1, width, dtype=np.float32)
+        if reverse:
+            axis = axis[::-1]
+        base = np.zeros((width, 3), dtype=np.uint8)
+        idx = np.floor(axis).astype(int)
+        frac = axis - idx
+        idx2 = np.clip(idx + 1, 0, len(anchors) - 1)
+        interp = anchors[idx] * (1.0 - frac[:, None]) + anchors[idx2] * frac[:, None]
+        base[:, :] = interp.astype(np.uint8)
+        arr[..., 2] = base[None, :, 0]
+        arr[..., 1] = base[None, :, 1]
+        arr[..., 0] = base[None, :, 2]
     else:
-        bar_height = max(height // bars, 1)
-        for i in range(bars):
-            start = i * bar_height
-            end = height if i == bars - 1 else min((i + 1) * bar_height, height)
-            grad = np.linspace(0, 255, max(end - start, 1), dtype=np.uint8)
-            if reverse:
-                grad = grad[::-1]
-            arr[start:end, :, i % 3] = grad[:, None]
+        axis = np.linspace(0, len(anchors) - 1, height, dtype=np.float32)
+        if reverse:
+            axis = axis[::-1]
+        base = np.zeros((height, 3), dtype=np.uint8)
+        idx = np.floor(axis).astype(int)
+        frac = axis - idx
+        idx2 = np.clip(idx + 1, 0, len(anchors) - 1)
+        interp = anchors[idx] * (1.0 - frac[:, None]) + anchors[idx2] * frac[:, None]
+        base[:, :] = interp.astype(np.uint8)
+        arr[..., 2] = base[:, None, 0]
+        arr[..., 1] = base[:, None, 1]
+        arr[..., 0] = base[:, None, 2]
     arr[..., 3] = 255
     return arr
 
@@ -179,6 +210,8 @@ def main():
             arr[:] = color_bar(width, height)
         elif pattern == 'checkerboard':
             arr[:] = checkerboard(width, height)
+        elif pattern in ('logic_34', 'sparkle_1', 'colorful_1'):
+            arr[:] = colorful_1(width, height)
         else:
             print(f'Unknown pattern: {pattern}')
             sys.exit(2)

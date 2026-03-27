@@ -1,9 +1,13 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "ssh")]
 use ssh2::Session;
+#[cfg(feature = "ssh")]
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
+#[cfg(feature = "ssh")]
 use std::time::Duration;
 
 #[cfg(target_os = "windows")]
@@ -66,6 +70,8 @@ pub struct DeviceProbeResult {
     pub model: Option<String>,
     pub virtual_size: Option<String>,
     pub bits_per_pixel: Option<String>,
+    pub mipi_mode: Option<String>,
+    pub mipi_lanes: Option<u32>,
     pub fb0_available: bool,
     pub vismpwr_available: bool,
     pub python3_available: bool,
@@ -87,6 +93,18 @@ pub struct TextDisplayRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImageDisplayRequest {
     pub image_path: String,
+    #[serde(default)]
+    pub remote_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImageDisplayFromBase64Request {
+    #[serde(alias = "fileName")]
+    pub filename: String,
+    #[serde(alias = "base64Data")]
+    pub base64_data: String,
+    #[serde(default, alias = "remoteName")]
+    pub remote_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,6 +115,80 @@ pub struct LogicPatternRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RuntimePatternRequest {
     pub pattern: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TimingBinRequest {
+    pub pclk: u64,
+    pub hact: u32,
+    pub hfp: u32,
+    pub hbp: u32,
+    pub hsync: u32,
+    pub vact: u32,
+    pub vfp: u32,
+    pub vbp: u32,
+    pub vsync: u32,
+    pub hs_polarity: bool,
+    pub vs_polarity: bool,
+    pub de_polarity: bool,
+    pub clk_polarity: bool,
+    pub interface_type: String,
+    pub mipi_mode: String,
+    pub video_type: String,
+    pub lanes: u8,
+    pub format: String,
+    pub phy_mode: String,
+    pub dsc_enable: bool,
+    pub dsc_version: String,
+    pub slice_width: u32,
+    pub slice_height: u32,
+    pub scrambling_enable: bool,
+    pub data_swap: bool,
+    pub init_codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DownloadOledConfigRequest {
+    pub request: TimingBinRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LegacyTimingConfig {
+    pub hact: u32,
+    pub vact: u32,
+    pub pclk: u64,
+    pub hfp: u32,
+    pub hbp: u32,
+    pub hsync: u32,
+    pub vfp: u32,
+    pub vbp: u32,
+    pub vsync: u32,
+    pub hs_polarity: bool,
+    pub vs_polarity: bool,
+    pub de_polarity: bool,
+    pub clk_polarity: bool,
+    pub interface_type: String,
+    pub mipi_mode: String,
+    pub video_type: String,
+    pub lanes: u8,
+    pub format: String,
+    pub phy_mode: String,
+    pub dsc_enable: bool,
+    pub dsc_version: String,
+    pub slice_width: u32,
+    pub slice_height: u32,
+    pub scrambling_enable: bool,
+    pub data_swap: bool,
+    pub dual_channel: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LegacyLcdConfigResult {
+    pub success: bool,
+    pub path: Option<String>,
+    pub timing: Option<LegacyTimingConfig>,
+    pub init_codes: Vec<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,6 +208,44 @@ pub struct PowerRailsResult {
     pub success: bool,
     pub rails: Vec<PowerRailReading>,
     pub total_power_mw: Option<f64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CommandPresetItem {
+    pub index: usize,
+    pub name: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandPresetListResult {
+    pub success: bool,
+    pub items: Vec<CommandPresetItem>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LocalImageInfo {
+    pub name: String,
+    pub path: String,
+    pub ext: String,
+    pub modified_ms: Option<u128>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LocalImagesResult {
+    pub success: bool,
+    pub images: Vec<LocalImageInfo>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImagePreviewResult {
+    pub success: bool,
+    pub data_url: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
     pub error: Option<String>,
 }
 
@@ -350,24 +480,6 @@ fn project_file(path: &str) -> String {
     project_root().join(path).to_string_lossy().to_string()
 }
 
-fn run_python_script(state: &tauri::State<Mutex<ConnectionState>>, script_path: &str, args: &[&str]) -> Result<AdbActionResult, String> {
-    let remote_script = "/data/local/tmp/_big8k_script.py";
-    let push_result = adb_push_internal(state, script_path, remote_script)?;
-    if !push_result.success {
-        return Ok(push_result);
-    }
-
-    let mut command = format!("python3 {}", shell_quote(remote_script));
-    for arg in args {
-        command.push(' ');
-        command.push_str(&shell_quote(arg));
-    }
-
-    let exec_result = adb_shell_internal(state, &command)?;
-    let _ = adb_shell_internal(state, &format!("rm -f {}", shell_quote(remote_script)));
-    Ok(exec_result)
-}
-
 #[tauri::command]
 fn adb_devices() -> AdbDevicesResult {
     query_adb_devices()
@@ -516,6 +628,7 @@ fn adb_pull(remote_path: String, local_path: String, state: tauri::State<Mutex<C
     }
 }
 
+#[cfg(feature = "ssh")]
 fn ssh_connect_session(host: &str, port: u16, username: &str, password: &str) -> Result<Session, String> {
     let target = format!("{}:{}", host, port);
     let addr = match target.to_socket_addrs() {
@@ -545,6 +658,7 @@ fn ssh_connect_session(host: &str, port: u16, username: &str, password: &str) ->
     Ok(session)
 }
 
+#[cfg(feature = "ssh")]
 #[tauri::command]
 fn ssh_connect(host: String, port: u16, username: String, password: String) -> SshConnectResult {
     match ssh_connect_session(&host, port, &username, &password) {
@@ -561,6 +675,17 @@ fn ssh_connect(host: String, port: u16, username: String, password: String) -> S
     }
 }
 
+#[cfg(not(feature = "ssh"))]
+#[tauri::command]
+fn ssh_connect(_host: String, _port: u16, _username: String, _password: String) -> SshConnectResult {
+    SshConnectResult {
+        success: false,
+        output: String::new(),
+        error: Some("当前构建未启用 SSH 功能".to_string()),
+    }
+}
+
+#[cfg(feature = "ssh")]
 #[tauri::command]
 fn ssh_exec(host: String, port: u16, username: String, password: String, command: String) -> SshExecResult {
     let session = match ssh_connect_session(&host, port, &username, &password) {
@@ -619,15 +744,27 @@ fn ssh_exec(host: String, port: u16, username: String, password: String, command
     }
 }
 
+#[cfg(not(feature = "ssh"))]
+#[tauri::command]
+fn ssh_exec(_host: String, _port: u16, _username: String, _password: String, _command: String) -> SshExecResult {
+    SshExecResult {
+        success: false,
+        output: String::new(),
+        error: Some("当前构建未启用 SSH 功能".to_string()),
+    }
+}
+
 #[tauri::command]
 fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeResult {
-    let command = "MODEL=$(getprop ro.product.model 2>/dev/null); VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null); BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null); [ -e /dev/fb0 ] && echo FB0=1 || echo FB0=0; command -v vismpwr >/dev/null 2>&1 && echo VISMPWR=1 || echo VISMPWR=0; command -v python3 >/dev/null 2>&1 && echo PYTHON3=1 || echo PYTHON3=0; echo MODEL=$MODEL; echo VSIZE=$VSIZE; echo BPP=$BPP";
+    let command = r"MODEL=$(getprop ro.product.model 2>/dev/null); VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null); BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null); if dmesg 2>/dev/null | grep -q 'Initialized in CMD mode'; then MIPI_MODE=CMD; else MIPI_MODE=VIDEO; fi; LANES=$( (dmesg 2>/dev/null | grep -ioE 'dsi,lanes: *[0-9]+' | tail -n 1 | grep -ioE '[0-9]+') || (dmesg 2>/dev/null | grep -ioE 'lanes=[0-9]+' | tail -n 1 | grep -ioE '[0-9]+') ); [ -e /dev/fb0 ] && echo FB0=1 || echo FB0=0; command -v vismpwr >/dev/null 2>&1 && echo VISMPWR=1 || echo VISMPWR=0; command -v python3 >/dev/null 2>&1 && echo PYTHON3=1 || echo PYTHON3=0; echo MODEL=$MODEL; echo VSIZE=$VSIZE; echo BPP=$BPP; echo MIPI_MODE=$MIPI_MODE; echo LANES=$LANES";
 
     match adb_shell_internal(&state, command) {
         Ok(result) if result.success => {
             let mut model = None;
             let mut virtual_size = None;
             let mut bits_per_pixel = None;
+            let mut mipi_mode = None;
+            let mut mipi_lanes = None;
             let mut fb0_available = false;
             let mut vismpwr_available = false;
             let mut python3_available = false;
@@ -645,6 +782,16 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
                     if !value.trim().is_empty() {
                         bits_per_pixel = Some(value.trim().to_string());
                     }
+                } else if let Some(value) = line.strip_prefix("MIPI_MODE=") {
+                    if !value.trim().is_empty() {
+                        mipi_mode = Some(value.trim().to_string());
+                    }
+                } else if let Some(value) = line.strip_prefix("LANES=") {
+                    if let Ok(parsed) = value.trim().parse::<u32>() {
+                        if parsed > 0 {
+                            mipi_lanes = Some(parsed);
+                        }
+                    }
                 } else if line.trim() == "FB0=1" {
                     fb0_available = true;
                 } else if line.trim() == "VISMPWR=1" {
@@ -659,6 +806,8 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
                 model,
                 virtual_size,
                 bits_per_pixel,
+                mipi_mode,
+                mipi_lanes,
                 fb0_available,
                 vismpwr_available,
                 python3_available,
@@ -670,6 +819,8 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
             model: None,
             virtual_size: None,
             bits_per_pixel: None,
+            mipi_mode: None,
+            mipi_lanes: None,
             fb0_available: false,
             vismpwr_available: false,
             python3_available: false,
@@ -680,6 +831,8 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
             model: None,
             virtual_size: None,
             bits_per_pixel: None,
+            mipi_mode: None,
+            mipi_lanes: None,
             fb0_available: false,
             vismpwr_available: false,
             python3_available: false,
@@ -1007,6 +1160,89 @@ fn run_runtime_pattern(request: RuntimePatternRequest, state: tauri::State<Mutex
     }
 }
 
+#[cfg(feature = "image-tools")]
+#[tauri::command]
+fn pick_image_directory() -> Option<String> {
+    rfd::FileDialog::new().pick_folder().map(|p| p.to_string_lossy().to_string())
+}
+
+#[cfg(not(feature = "image-tools"))]
+#[tauri::command]
+fn pick_image_directory() -> Option<String> {
+    None
+}
+
+#[cfg(feature = "image-tools")]
+#[tauri::command]
+fn create_image_preview(image_path: String) -> ImagePreviewResult {
+    let path = std::path::PathBuf::from(&image_path);
+    if !path.is_file() {
+        return ImagePreviewResult { success: false, data_url: None, width: None, height: None, error: Some("图片不存在".to_string()) };
+    }
+    let img = match image::open(&path) {
+        Ok(img) => img,
+        Err(err) => return ImagePreviewResult { success: false, data_url: None, width: None, height: None, error: Some(format!("读取图片失败: {}", err)) },
+    };
+    let width = img.width();
+    let height = img.height();
+    let thumb = img.thumbnail(420, 300);
+    let mut bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut bytes);
+    if let Err(err) = thumb.write_to(&mut cursor, image::ImageFormat::Png) {
+        return ImagePreviewResult { success: false, data_url: None, width: Some(width), height: Some(height), error: Some(format!("生成预览失败: {}", err)) };
+    }
+    let data_url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes));
+    ImagePreviewResult { success: true, data_url: Some(data_url), width: Some(width), height: Some(height), error: None }
+}
+
+#[cfg(not(feature = "image-tools"))]
+#[tauri::command]
+fn create_image_preview(_image_path: String) -> ImagePreviewResult {
+    ImagePreviewResult { success: false, data_url: None, width: None, height: None, error: Some("当前构建未启用图片预览功能".to_string()) }
+}
+
+#[cfg(feature = "image-tools")]
+#[tauri::command]
+fn list_images_in_directory(dir_path: String) -> LocalImagesResult {
+    let dir = std::path::PathBuf::from(dir_path);
+    if !dir.is_dir() {
+        return LocalImagesResult { success: false, images: vec![], error: Some("目录不存在或不可访问".to_string()) };
+    }
+
+    let mut images = Vec::new();
+    let allowed = ["bmp", "png", "jpg", "jpeg", "webp"];
+    let read_dir = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(err) => return LocalImagesResult { success: false, images: vec![], error: Some(format!("读取目录失败: {}", err)) },
+    };
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if !path.is_file() { continue; }
+        let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_lowercase();
+        if !allowed.contains(&ext.as_str()) { continue; }
+        let metadata = entry.metadata().ok();
+        let modified_ms = metadata
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis());
+        images.push(LocalImageInfo {
+            name: path.file_name().and_then(|v| v.to_str()).unwrap_or("").to_string(),
+            path: path.to_string_lossy().to_string(),
+            ext: format!(".{}", ext),
+            modified_ms,
+        });
+    }
+
+    LocalImagesResult { success: true, images, error: None }
+}
+
+#[cfg(not(feature = "image-tools"))]
+#[tauri::command]
+fn list_images_in_directory(_dir_path: String) -> LocalImagesResult {
+    LocalImagesResult { success: false, images: vec![], error: Some("当前构建未启用图片目录浏览功能".to_string()) }
+}
+
 #[tauri::command]
 fn read_power_rails(state: tauri::State<Mutex<ConnectionState>>) -> PowerRailsResult {
     let script = r#"
@@ -1143,31 +1379,19 @@ print(json.dumps({'rails': results, 'total_power_mw': round(total, 3)}, ensure_a
 
 #[tauri::command]
 fn run_demo_screen(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
+    let (width, height) = match detect_framebuffer_size(&state) {
+        Ok(size) => size,
+        Err(error) => {
+            return PatternResult { success: false, message: String::new(), error: Some(error) }
+        }
+    };
+    let width_arg = width.to_string();
+    let height_arg = height.to_string();
     run_remote_python_script(
         &state,
         &project_file("python/fb_demo.py"),
         "/data/local/tmp/fb_demo.py",
-        &[],
-    )
-}
-
-#[tauri::command]
-fn run_text_demo(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
-    run_remote_python_script(
-        &state,
-        &project_file("python/fb_text_demo.py"),
-        "/data/local/tmp/fb_text_demo.py",
-        &[],
-    )
-}
-
-#[tauri::command]
-fn run_poster_demo(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
-    run_remote_python_script(
-        &state,
-        &project_file("python/fb_text_poster.py"),
-        "/data/local/tmp/fb_text_poster.py",
-        &[],
+        &[&width_arg, &height_arg],
     )
 }
 
@@ -1228,6 +1452,47 @@ fn display_text(request: TextDisplayRequest, state: tauri::State<Mutex<Connectio
 }
 
 #[tauri::command]
+fn display_image_from_base64(request: ImageDisplayFromBase64Request, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
+    let filename = if request.filename.trim().is_empty() {
+        "input_image.bin".to_string()
+    } else {
+        request.filename.trim().to_string()
+    };
+    let temp_dir = std::env::temp_dir();
+    let local_path = temp_dir.join(&filename);
+    let decoded = match base64::engine::general_purpose::STANDARD.decode(request.base64_data.as_bytes()) {
+        Ok(data) => data,
+        Err(err) => {
+            return PatternResult { success: false, message: String::new(), error: Some(format!("Base64 解码失败: {}", err)) }
+        }
+    };
+    if let Err(err) = std::fs::write(&local_path, decoded) {
+        return PatternResult { success: false, message: String::new(), error: Some(format!("写入临时图片失败: {}", err)) };
+    }
+    let result = display_image(ImageDisplayRequest { image_path: local_path.to_string_lossy().to_string(), remote_name: request.remote_name.clone() }, state);
+    let _ = std::fs::remove_file(local_path);
+    result
+}
+
+#[tauri::command]
+fn display_remote_image(remote_image_path: String, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
+    if remote_image_path.trim().is_empty() {
+        return PatternResult {
+            success: false,
+            message: String::new(),
+            error: Some("远程图片路径不能为空".to_string()),
+        };
+    }
+
+    run_remote_python_script(
+        &state,
+        &project_file("python/fb_image_display.py"),
+        "/data/local/tmp/fb_image_display.py",
+        &[&remote_image_path],
+    )
+}
+
+#[tauri::command]
 fn display_image(request: ImageDisplayRequest, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
     if request.image_path.trim().is_empty() {
         return PatternResult {
@@ -1245,8 +1510,20 @@ fn display_image(request: ImageDisplayRequest, state: tauri::State<Mutex<Connect
         };
     }
 
-    let remote_image = "/data/local/tmp/input_image.png";
-    match adb_push_internal(&state, &request.image_path, remote_image) {
+    let remote_name = request.remote_name.clone().unwrap_or_else(|| {
+        Path::new(&request.image_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("input_image.png")
+            .to_string()
+    });
+    let safe_remote_name: String = remote_name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    let remote_image = format!("/data/local/tmp/big8k_images/{}", safe_remote_name);
+    let _ = adb_shell_internal(&state, "mkdir -p /data/local/tmp/big8k_images");
+    match adb_push_internal(&state, &request.image_path, &remote_image) {
         Ok(push_result) if push_result.success => {}
         Ok(push_result) => {
             return PatternResult {
@@ -1268,7 +1545,7 @@ fn display_image(request: ImageDisplayRequest, state: tauri::State<Mutex<Connect
         &state,
         &project_file("python/fb_image_display.py"),
         "/data/local/tmp/fb_image_display.py",
-        &[remote_image],
+        &[&remote_image],
     )
 }
 
@@ -1383,6 +1660,506 @@ fn clear_screen(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
     display_solid_color("black".to_string(), state)
 }
 
+fn write_entry(buffer: &mut Vec<u8>, offset: u32, length: u32) {
+    buffer.extend_from_slice(&offset.to_le_bytes());
+    buffer.extend_from_slice(&length.to_le_bytes());
+}
+
+fn align(size: usize, alignment: usize) -> usize {
+    (size + alignment - 1) & !(alignment - 1)
+}
+
+fn parse_hex_csv_line(line: &str) -> Result<Vec<u8>, String> {
+    let bytes: Result<Vec<u8>, String> = line
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| u8::from_str_radix(part.trim(), 16).map_err(|_| format!("初始化代码字节解析失败: {}", part.trim())))
+        .collect();
+    bytes
+}
+
+fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("读取点屏配置失败: {}", e))?;
+    if bytes.len() < 200 {
+        return Err(format!("点屏配置文件长度不足，至少需要 200 字节，实际 {} 字节", bytes.len()));
+    }
+
+    let pclk = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as u64;
+    let hact = u16::from_be_bytes([bytes[5], bytes[6]]) as u32;
+    let vact = u16::from_be_bytes([bytes[7], bytes[8]]) as u32;
+    let hbp = u16::from_be_bytes([bytes[9], bytes[10]]) as u32;
+    let vbp = u16::from_be_bytes([bytes[11], bytes[12]]) as u32;
+    let hfp = u16::from_be_bytes([bytes[13], bytes[14]]) as u32;
+    let vfp = u16::from_be_bytes([bytes[15], bytes[16]]) as u32;
+    let hsync = u16::from_be_bytes([bytes[17], bytes[18]]) as u32;
+    let vsync = u16::from_be_bytes([bytes[19], bytes[20]]) as u32;
+
+    let hs_polarity = bytes[21] != 0;
+    let vs_polarity = bytes[22] != 0;
+    let de_polarity = bytes[23] != 0;
+    let clk_polarity = bytes[24] != 0;
+
+    let lanes = bytes[27];
+    let interface_type = match bytes[30] {
+        1 => "EDP",
+        2 => "DP",
+        _ => "MIPI",
+    }
+    .to_string();
+    let mipi_mode = match bytes[31] {
+        1 => "Command",
+        _ => "Video",
+    }
+    .to_string();
+    let video_type = match bytes[32] {
+        0 => "BURST_MODE",
+        1 => "NON_BURST_SYNC_PULSES",
+        _ => "NON_BURST_SYNC_EVENTS",
+    }
+    .to_string();
+    let format = match bytes[33] {
+        0 => "RGB888",
+        1 => "RGB666",
+        2 => "RGB666_PACKED",
+        3 => "RGB565",
+        _ => "RGB888",
+    }
+    .to_string();
+    let phy_mode = if bytes[34] == 1 { "CPHY" } else { "DPHY" }.to_string();
+    let dsc_enable = bytes[35] != 0;
+    let scrambling_enable = bytes[36] != 0;
+    let data_swap = bytes[37] != 0;
+    let dual_channel = bytes[38] != 0;
+    let slice_width = u16::from_be_bytes([bytes[39], bytes[40]]) as u32;
+    let slice_height = u16::from_be_bytes([bytes[41], bytes[42]]) as u32;
+    let dsc_version = if bytes[43] == 1 && bytes[44] == 2 {
+        "Vesa1.2"
+    } else {
+        "Ver1.1"
+    }
+    .to_string();
+
+    let mut init_codes = Vec::new();
+    let mut i = 200usize;
+    while i < bytes.len() {
+        if i + 2 >= bytes.len() {
+            break;
+        }
+        let payload_len = bytes[i + 2] as usize;
+        let line_len = payload_len + 3;
+        if i + line_len > bytes.len() {
+            return Err(format!("初始化代码区损坏：第 {} 字节开始的命令超出文件长度", i));
+        }
+        let line = bytes[i..i + line_len]
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<Vec<_>>()
+            .join(" ");
+        init_codes.push(line);
+        i += line_len;
+    }
+
+    Ok(LegacyLcdConfigResult {
+        success: true,
+        path: Some(path.to_string()),
+        timing: Some(LegacyTimingConfig {
+            hact,
+            vact,
+            pclk,
+            hfp,
+            hbp,
+            hsync,
+            vfp,
+            vbp,
+            vsync,
+            hs_polarity,
+            vs_polarity,
+            de_polarity,
+            clk_polarity,
+            interface_type,
+            mipi_mode,
+            video_type,
+            lanes,
+            format,
+            phy_mode,
+            dsc_enable,
+            dsc_version,
+            slice_width,
+            slice_height,
+            scrambling_enable,
+            data_swap,
+            dual_channel,
+        }),
+        init_codes,
+        error: None,
+    })
+}
+
+#[tauri::command]
+fn pick_lcd_config_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .add_filter("LCD config", &["bin"])
+        .pick_file()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn parse_legacy_lcd_bin(path: String) -> LegacyLcdConfigResult {
+    match parse_legacy_lcd_bin_file(&path) {
+        Ok(result) => result,
+        Err(err) => LegacyLcdConfigResult {
+            success: false,
+            path: Some(path),
+            timing: None,
+            init_codes: Vec::new(),
+            error: Some(err),
+        },
+    }
+}
+
+#[tauri::command]
+fn generate_timing_bin(request: TimingBinRequest) -> GenericResult {
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            return GenericResult { success: false, output: String::new(), error: Some(format!("无法定位程序目录: {}", err)) };
+        }
+    };
+    let dir = match exe.parent() {
+        Some(dir) => dir,
+        None => {
+            return GenericResult { success: false, output: String::new(), error: Some("无法定位程序目录".to_string()) };
+        }
+    };
+    let output_path = dir.join("vis-timing.bin");
+
+    let mut init_seq: Vec<u8> = Vec::new();
+    for line in request.init_codes.iter().filter(|line| !line.trim().is_empty()) {
+        match parse_hex_csv_line(line) {
+            Ok(bytes) => {
+                if bytes.len() < 3 {
+                    return GenericResult { success: false, output: String::new(), error: Some(format!("初始化代码长度不足(至少3字节): {}", line)) };
+                }
+                init_seq.extend_from_slice(&bytes);
+            }
+            Err(err) => {
+                return GenericResult { success: false, output: String::new(), error: Some(err) };
+            }
+        }
+    }
+
+    let header_size = 96usize;
+    let timing_size = 48usize;
+    let init_seq_size = init_seq.len();
+    let exit_seq: [u8; 8] = [0x05, 0x78, 0x01, 0x28, 0x05, 0x00, 0x01, 0x10];
+    let vesa_dsc_size = 16usize;
+    let other_info_size = 16usize;
+
+    let timing_offset = align(header_size, 16);
+    let init_seq_offset = timing_offset + timing_size;
+    let exit_seq_offset = init_seq_offset + init_seq_size;
+    let vesa_dsc_offset = exit_seq_offset + exit_seq.len();
+    let other_info_offset = vesa_dsc_offset + vesa_dsc_size;
+    let total_size = other_info_offset + other_info_size;
+
+    let mut out: Vec<u8> = Vec::with_capacity(total_size);
+    out.extend_from_slice(&0xA5A55A5Au32.to_le_bytes());
+    let mut panel_vendor = [0u8; 16];
+    panel_vendor[..16].copy_from_slice(b"Visonox890123456");
+    out.extend_from_slice(&panel_vendor);
+    let mut panel_name = [0u8; 16];
+    panel_name[..16].copy_from_slice(b"DSI-Panel0123456");
+    out.extend_from_slice(&panel_name);
+    let mut version = [0u8; 8];
+    version.copy_from_slice(b"1.234567");
+    out.extend_from_slice(&version);
+
+    write_entry(&mut out, timing_offset as u32, timing_size as u32);
+    write_entry(&mut out, init_seq_offset as u32, init_seq_size as u32);
+    write_entry(&mut out, exit_seq_offset as u32, exit_seq.len() as u32);
+    write_entry(&mut out, 0, 0);
+    write_entry(&mut out, vesa_dsc_offset as u32, vesa_dsc_size as u32);
+    write_entry(&mut out, other_info_offset as u32, other_info_size as u32);
+    out.extend_from_slice(&(total_size as u32).to_le_bytes());
+
+    while out.len() < timing_offset {
+        out.push(0);
+    }
+
+    out.extend_from_slice(&request.pclk.to_le_bytes());
+    out.extend_from_slice(&request.hact.to_le_bytes());
+    out.extend_from_slice(&request.hfp.to_le_bytes());
+    out.extend_from_slice(&request.hbp.to_le_bytes());
+    out.extend_from_slice(&request.hsync.to_le_bytes());
+    out.extend_from_slice(&request.vact.to_le_bytes());
+    out.extend_from_slice(&request.vfp.to_le_bytes());
+    out.extend_from_slice(&request.vbp.to_le_bytes());
+    out.extend_from_slice(&request.vsync.to_le_bytes());
+
+    let mut display_flags: u32 = 0;
+    display_flags |= if request.hs_polarity { 1 << 1 } else { 1 << 0 };
+    display_flags |= if request.vs_polarity { 1 << 3 } else { 1 << 2 };
+    display_flags |= if request.de_polarity { 1 << 5 } else { 1 << 4 };
+    display_flags |= if request.clk_polarity { 1 << 7 } else { 1 << 6 };
+    out.extend_from_slice(&display_flags.to_le_bytes());
+    out.extend_from_slice(&[0u8; 4]);
+
+    out.extend_from_slice(&init_seq);
+    out.extend_from_slice(&exit_seq);
+
+    let phy_mode = if request.phy_mode.eq_ignore_ascii_case("CPHY") { 1u8 } else { 0u8 };
+    let (ver_major, ver_minor) = if request.dsc_version.contains("1.2") { (1u8, 2u8) } else { (1u8, 1u8) };
+    out.push(phy_mode);
+    out.push(if request.scrambling_enable { 1 } else { 0 });
+    out.push(if request.dsc_enable { 1 } else { 0 });
+    out.push(ver_major);
+    out.push(ver_minor);
+    out.extend_from_slice(&[0u8; 3]);
+    out.extend_from_slice(&request.slice_width.to_le_bytes());
+    out.extend_from_slice(&request.slice_height.to_le_bytes());
+
+    let mut mipi_mode_video_type: u16 = 0;
+    if request.mipi_mode.eq_ignore_ascii_case("Video") {
+        mipi_mode_video_type |= 1 << 0;
+        if request.video_type.eq_ignore_ascii_case("NON_BURST_SYNC_PULSES") {
+            mipi_mode_video_type |= 1 << 2;
+        } else if request.video_type.eq_ignore_ascii_case("BURST_MODE") {
+            mipi_mode_video_type |= 1 << 1;
+        }
+    }
+    mipi_mode_video_type |= 1 << 11;
+    mipi_mode_video_type |= 1 << 9;
+    out.push((mipi_mode_video_type & 0xFF) as u8);
+    out.push(((mipi_mode_video_type >> 8) & 0xFF) as u8);
+    out.push(if request.data_swap { 1 } else { 0 });
+    let interface_type = match request.interface_type.as_str() {
+        "EDP" => 1u8,
+        "DP" => 2u8,
+        _ => 0u8,
+    };
+    out.push(interface_type);
+    let format_type = match request.format.as_str() {
+        "RGB888" => 0u8,
+        "RGB666" => 1u8,
+        "RGB666_PACKED" => 2u8,
+        "RGB565" => 3u8,
+        _ => 0u8,
+    };
+    out.push(format_type);
+    out.push(request.lanes);
+    out.push(phy_mode);
+    out.extend_from_slice(&[0x56, 0x69, 0x73]);
+    out.extend_from_slice(&[0u8; 6]);
+
+    match std::fs::write(&output_path, out) {
+        Ok(_) => GenericResult { success: true, output: output_path.to_string_lossy().to_string(), error: None },
+        Err(err) => GenericResult { success: false, output: String::new(), error: Some(format!("写入 timing bin 失败: {}", err)) },
+    }
+}
+
+// 命令清单存储路径：优先使用新文件名 command_presets.json，兼容旧文件 cmdx_list.json。
+fn command_preset_data_paths() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("无法定位可执行文件路径: {}", e))?;
+    let dir = exe.parent().ok_or_else(|| "无法定位可执行文件目录".to_string())?;
+    Ok((dir.join("command_presets.json"), dir.join("cmdx_list.json")))
+}
+
+// 旧命令名兼容入口：保留给历史前端版本使用。
+#[tauri::command]
+fn load_cmdx_list() -> CommandPresetListResult {
+    let mut items: Vec<CommandPresetItem> = (1..=30)
+        .map(|i| CommandPresetItem {
+            index: i - 1,
+            name: format!("{:02}-CMD", i),
+            content: String::new(),
+        })
+        .collect();
+
+    let (primary_path, legacy_path) = match command_preset_data_paths() {
+        Ok(paths) => paths,
+        Err(err) => {
+            return CommandPresetListResult { success: false, items, error: Some(err) };
+        }
+    };
+
+    let path_to_read = if primary_path.exists() {
+        primary_path.clone()
+    } else {
+        legacy_path.clone()
+    };
+
+    if path_to_read.exists() {
+        match std::fs::read_to_string(&path_to_read) {
+            Ok(raw) => match serde_json::from_str::<Vec<CommandPresetItem>>(&raw) {
+                Ok(mut loaded) => {
+                    loaded.sort_by_key(|item| item.index);
+                    if !loaded.is_empty() {
+                        items = loaded;
+                    }
+                    let note = if path_to_read == legacy_path {
+                        Some(format!("已兼容读取旧命令清单文件: {}；后续保存将写入新文件 command_presets.json", legacy_path.display()))
+                    } else {
+                        None
+                    };
+                    CommandPresetListResult { success: true, items, error: note }
+                }
+                Err(err) => CommandPresetListResult { success: false, items, error: Some(format!("命令清单解析失败: {}", err)) },
+            },
+            Err(err) => CommandPresetListResult { success: false, items, error: Some(format!("读取命令清单失败: {}", err)) },
+        }
+    } else {
+        CommandPresetListResult { success: true, items, error: None }
+    }
+}
+
+// 旧命令名兼容入口：保留给历史前端版本使用。
+#[tauri::command]
+fn save_cmdx_list(items: Vec<CommandPresetItem>) -> GenericResult {
+    let (primary_path, _) = match command_preset_data_paths() {
+        Ok(paths) => paths,
+        Err(err) => {
+            return GenericResult { success: false, output: String::new(), error: Some(err) };
+        }
+    };
+
+    let mut sorted = items;
+    sorted.sort_by_key(|item| item.index);
+
+    match serde_json::to_string_pretty(&sorted) {
+        Ok(json) => match std::fs::write(&primary_path, json) {
+            Ok(_) => GenericResult { success: true, output: format!("已保存命令清单: {}", primary_path.display()), error: None },
+            Err(err) => GenericResult { success: false, output: String::new(), error: Some(format!("写入命令清单失败: {}", err)) },
+        },
+        Err(err) => GenericResult { success: false, output: String::new(), error: Some(format!("序列化命令清单失败: {}", err)) },
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportOledConfigJsonRequest {
+    request: TimingBinRequest,
+}
+
+#[tauri::command]
+fn export_oled_config_json(payload: ExportOledConfigJsonRequest) -> GenericResult {
+    let path = match rfd::FileDialog::new()
+        .add_filter("OLED config json", &["json"])
+        .set_file_name("oled-config.json")
+        .save_file()
+    {
+        Some(path) => path,
+        None => {
+            return GenericResult {
+                success: false,
+                output: String::new(),
+                error: Some("已取消导出 OLED 配置 JSON".to_string()),
+            }
+        }
+    };
+
+    let json = match serde_json::to_string_pretty(&payload.request) {
+        Ok(json) => json,
+        Err(err) => {
+            return GenericResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("序列化 OLED 配置 JSON 失败: {}", err)),
+            }
+        }
+    };
+
+    if let Err(err) = std::fs::write(&path, json) {
+        return GenericResult {
+            success: false,
+            output: String::new(),
+            error: Some(format!("写入 OLED 配置 JSON 失败: {}", err)),
+        };
+    }
+
+    GenericResult {
+        success: true,
+        output: format!("已导出 OLED 配置 JSON: {}；vis-timing.bin 默认保存在程序目录", path.display()),
+        error: None,
+    }
+}
+
+#[tauri::command]
+fn download_oled_config_and_reboot(
+    payload: DownloadOledConfigRequest,
+    state: tauri::State<Mutex<ConnectionState>>,
+) -> GenericResult {
+    let generated = generate_timing_bin(payload.request);
+    if !generated.success {
+        return generated;
+    }
+
+    let local_path = generated.output.clone();
+    match adb_push_internal(&state, &local_path, "/vismm/vis-timing.bin") {
+        Ok(result) if result.success => {}
+        Ok(result) => {
+            return GenericResult {
+                success: false,
+                output: result.output,
+                error: result.error.or(Some("初始化配置下载失败：push 失败".to_string())),
+            };
+        }
+        Err(error) => {
+            return GenericResult {
+                success: false,
+                output: String::new(),
+                error: Some(error),
+            };
+        }
+    }
+
+    match adb_shell_internal(&state, "/vismm/tools/repack_initrd.sh && sync") {
+        Ok(result) if result.success => {}
+        Ok(result) => {
+            return GenericResult {
+                success: false,
+                output: result.output,
+                error: result.error.or(Some("repack_initrd 执行失败".to_string())),
+            };
+        }
+        Err(error) => {
+            return GenericResult {
+                success: false,
+                output: String::new(),
+                error: Some(error),
+            };
+        }
+    }
+
+    match adb_shell_internal(&state, "reboot") {
+        Ok(result) if result.success => GenericResult {
+            success: true,
+            output: format!("初始化配置下载完成并重启设备：{}", local_path),
+            error: None,
+        },
+        Ok(result) => GenericResult {
+            success: false,
+            output: result.output,
+            error: result.error.or(Some("重启命令执行失败".to_string())),
+        },
+        Err(error) => GenericResult {
+            success: false,
+            output: String::new(),
+            error: Some(error),
+        },
+    }
+}
+
+// 新命令名：供当前前端与后续版本使用。
+#[tauri::command]
+fn load_command_presets() -> CommandPresetListResult {
+    load_cmdx_list()
+}
+
+// 新命令名：供当前前端与后续版本使用。
+#[tauri::command]
+fn save_command_presets(items: Vec<CommandPresetItem>) -> GenericResult {
+    save_cmdx_list(items)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1406,11 +2183,14 @@ pub fn run() {
             sync_runtime_patterns,
             run_runtime_pattern,
             read_power_rails,
+            pick_image_directory,
+            create_image_preview,
+            list_images_in_directory,
             run_demo_screen,
-            run_text_demo,
-            run_poster_demo,
             run_logic_pattern,
             display_text,
+            display_image_from_base64,
+            display_remote_image,
             display_image,
             mipi_send_command,
             mipi_send_commands,
@@ -1418,7 +2198,16 @@ pub fn run() {
             mipi_read_power_mode,
             mipi_sleep_in,
             mipi_sleep_out,
-            clear_screen
+            clear_screen,
+            pick_lcd_config_file,
+            parse_legacy_lcd_bin,
+            generate_timing_bin,
+            export_oled_config_json,
+            download_oled_config_and_reboot,
+            load_cmdx_list,
+            save_cmdx_list,
+            load_command_presets,
+            save_command_presets
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

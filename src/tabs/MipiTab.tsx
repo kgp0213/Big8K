@@ -12,24 +12,25 @@ import {
   grayButtons,
   logicPatternOptions,
 } from "../features/mipi/constants";
-import { getLastLcdConfigPath, loadRecentConfigs, saveRecentConfig } from "../features/mipi/storage";
+import { getLastLcdConfigPath, loadMipiRightEditor, loadRecentConfigs, saveMipiRightEditor, saveRecentConfig } from "../features/mipi/storage";
 import RecentConfigMenu from "../features/mipi/RecentConfigMenu";
 import QuickActionsPanel from "../features/mipi/QuickActionsPanel";
 import TimingPanel from "../features/mipi/TimingPanel";
 import DriverCodePanel from "../features/mipi/DriverCodePanel";
 import {
   applyOledConfig,
-  handleFormatCheckAction,
-  handleFormatConvertAction,
+  handleExportOledConfigJsonAction,
   handleGenerateConfigDownloadAction,
   handleLogicPatternAction,
-  handleMoveLeftToRightAction,
-  handleMoveRightToLeftAction,
+  handleNormalizeToStandardAction,
   handleReadStatusAction,
-  handleRightFormatCheckAction,
+  handleRightConvertibilityCheckAction,
   handleRuntimePatternAction,
-  handleSendAllAction,
+  handleSendRightEditorAction,
   handleSimpleCommandAction,
+  handleStandardToFormattedAction,
+  handleFormattedToStandardAction,
+  handleVismpwrCheckAction,
   parseDriverCodeLines,
 } from "../features/mipi/actions";
 import type {
@@ -42,7 +43,7 @@ export default function MipiTab() {
   const { appendLog, debugMode } = useConnection();
   const [driverCode, setDriverCode] = useState<string[]>(DEFAULT_DRIVER_CODE);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
-  const [editValue, setEditValue] = useState("");
+  const [rightEditorDraft, setRightEditorDraft] = useState(() => loadMipiRightEditor());
   const [driverCodeText, setDriverCodeText] = useState(DEFAULT_DRIVER_CODE.join("\n"));
   const [timing, setTiming] = useState<TimingConfig>(defaultTiming);
   const [showBasicSection, setShowBasicSection] = useState(false);
@@ -106,11 +107,12 @@ export default function MipiTab() {
       }
       await applyOledConfig(selectedPath, {
         expandBasicSection: true,
+        syncRightEditor: true,
         setTiming,
         setShowBasicSection,
         syncDriverCodeText,
         setSelectedIndex,
-        setEditValue,
+        setEditValue: setRightEditorDraft,
         persistRecentConfig,
         appendLog,
       });
@@ -123,11 +125,12 @@ export default function MipiTab() {
     try {
       await applyOledConfig(path, {
         expandBasicSection: true,
+        syncRightEditor: true,
         setTiming,
         setShowBasicSection,
         syncDriverCodeText,
         setSelectedIndex,
-        setEditValue,
+        setEditValue: setRightEditorDraft,
         persistRecentConfig,
         appendLog,
       });
@@ -150,11 +153,12 @@ export default function MipiTab() {
     void applyOledConfig(lastPath, {
       silent: true,
       expandBasicSection: false,
+      syncRightEditor: false,
       setTiming,
       setShowBasicSection,
       syncDriverCodeText,
       setSelectedIndex,
-      setEditValue,
+      setEditValue: setRightEditorDraft,
       persistRecentConfig,
       appendLog,
     }).catch((error) => {
@@ -188,16 +192,24 @@ export default function MipiTab() {
     };
   }, []);
 
+  useEffect(() => {
+    saveMipiRightEditor(rightEditorDraft);
+  }, [rightEditorDraft]);
+
   const handleGenerateConfigDownload = async () => {
-    await handleGenerateConfigDownloadAction(timing, driverCode, appendLog);
+    await handleGenerateConfigDownloadAction(timing, driverCode, appendLog, debugMode);
   };
 
-  const handleMoveLeftToRight = () => {
-    handleMoveLeftToRightAction(driverCodeText, setEditValue, appendLog);
+  const handleExportOledConfig = async () => {
+    await handleExportOledConfigJsonAction(timing, driverCode, appendLog);
   };
 
-  const handleSendAll = async () => {
-    await handleSendAllAction(editValue, debugMode, appendLog);
+  const handleFormattedToStandard = () => {
+    handleFormattedToStandardAction(driverCodeText, setRightEditorDraft, appendLog);
+  };
+
+  const handleSendRightEditor = async () => {
+    await handleSendRightEditorAction(rightEditorDraft, debugMode, appendLog);
   };
 
   const handleSolidColor = async (color: string, label: string) => {
@@ -279,9 +291,12 @@ export default function MipiTab() {
               <Download className="w-4 h-4" />
               打开 OLED 配置
             </button>
-            <button className="inline-flex h-10 min-h-10 items-center gap-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 hover:bg-gray-100 dark:bg-gray-800 dark:hover:bg-gray-700 px-4 text-sm font-medium text-gray-600 dark:text-gray-300 transition-colors align-middle">
+            <button
+              onClick={handleExportOledConfig}
+              className="inline-flex h-10 min-h-10 items-center gap-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 hover:bg-gray-100 dark:bg-gray-800 dark:hover:bg-gray-700 px-4 text-sm font-medium text-gray-600 dark:text-gray-300 transition-colors align-middle"
+            >
               <Upload className="w-4 h-4" />
-              导出 OLED 配置
+              导出 OLED 配置(JSON)
             </button>
           </div>
         </div>
@@ -296,10 +311,8 @@ export default function MipiTab() {
 
           <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-4 items-start max-w-[1180px]">
             <DriverCodePanel
-              driverCode={driverCode}
               driverCodeText={driverCodeText}
-              selectedIndex={selectedIndex}
-              editValue={editValue}
+              editValue={rightEditorDraft}
               onDriverCodeTextChange={(text) => {
                 setDriverCodeText(text);
                 const parsed = parseDriverCodeLines(text);
@@ -311,25 +324,24 @@ export default function MipiTab() {
                   setSelectedIndex(0);
                 }
               }}
-              onEditValueChange={setEditValue}
-              onSendAll={handleSendAll}
-              onFormatCheck={() =>
-                handleFormatCheckAction(
+              onEditValueChange={setRightEditorDraft}
+              onSendRightEditor={handleSendRightEditor}
+              onVismpwrCheck={() =>
+                handleVismpwrCheckAction(
                   driverCodeText,
                   selectedIndex,
                   syncDriverCodeText,
                   setSelectedIndex,
-                  setEditValue,
                   appendLog,
                 )
               }
-              onMoveLeftToRight={handleMoveLeftToRight}
+              onFormattedToStandard={handleFormattedToStandard}
               onGenerateConfigDownload={handleGenerateConfigDownload}
-              onMoveRightToLeft={() =>
-                handleMoveRightToLeftAction(editValue, syncDriverCodeText, setDriverCode, setSelectedIndex, appendLog)
+              onStandardToFormatted={() =>
+                handleStandardToFormattedAction(rightEditorDraft, syncDriverCodeText, setDriverCode, setSelectedIndex, appendLog)
               }
-              onRightFormatCheck={() => handleRightFormatCheckAction(editValue, appendLog)}
-              onFormatConvert={() => handleFormatConvertAction(editValue, setEditValue, appendLog)}
+              onRightConvertibilityCheck={() => handleRightConvertibilityCheckAction(rightEditorDraft, appendLog)}
+              onNormalizeToStandard={() => handleNormalizeToStandardAction(rightEditorDraft, setRightEditorDraft, appendLog)}
             />
 
             <div className="space-y-4">

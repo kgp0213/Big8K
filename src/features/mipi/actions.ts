@@ -8,6 +8,8 @@ import {
 } from "../../utils/codeFormatter";
 import type {
   CommandResult,
+  DownloadOledConfigPayload,
+  ExportOledConfigJsonPayload,
   LegacyLcdConfigResult,
   PatternResult,
   ReadStatusResult,
@@ -32,82 +34,118 @@ export const convertRightTextToInitCode = (text: string) => {
   return result.formattedLines;
 };
 
-export const handleRightFormatCheckAction = (value: string, appendLog: AppendLog) => {
+export const handleRightConvertibilityCheckAction = (value: string, appendLog: AppendLog) => {
   const trimmed = value.trim();
   if (!trimmed) {
-    appendLog("右侧文本框没有可检查的内容", "warning");
+    appendLog("右侧没有可检查的原始代码", "warning");
     return;
   }
 
   const result = normalizeToStandardCode(trimmed);
   if (!result.ok) {
     result.errors.forEach((error) => appendLog(error, "error"));
-    appendLog(`格式检查，共发现 ${result.errors.length} 处问题`, "error");
+    appendLog(`可转换性检查未通过：共 ${result.errors.length} 处问题`, "error");
     return;
   }
 
-  appendLog(`代码检查通过：共 ${result.standardLines.length} 行`, "success");
+  result.warnings?.forEach((warning) => appendLog(warning, "warning"));
+  if ((result.warnings?.length ?? 0) > 0) {
+    appendLog(`可转换性检查通过，但检测到 ${result.warnings?.length ?? 0} 行疑似格式化代码样式输入，请人工重点检查`, "warning");
+    return;
+  }
+
+  appendLog(`可转换性检查通过：可转换为 ${result.standardLines.length} 行标准代码`, "success");
 };
 
-export const handleFormatConvertAction = (
+export const handleNormalizeToStandardAction = (
   value: string,
   setEditValue: (value: string) => void,
   appendLog: AppendLog,
 ) => {
   const trimmed = value.trim();
   if (!trimmed) {
-    appendLog("没有可转换的内容", "warning");
+    appendLog("右侧没有可转换的原始代码", "warning");
     return;
   }
 
   const result = normalizeToStandardCode(trimmed);
   if (!result.ok) {
     result.errors.forEach((error) => appendLog(error, "error"));
-    appendLog(`格式转换失败：共 ${result.errors.length} 处问题`, "error");
+    appendLog(`标准化转换失败：共 ${result.errors.length} 处问题`, "error");
     return;
   }
+
+  result.warnings?.forEach((warning) => appendLog(warning, "warning"));
 
   const normalizedOriginal = parseDriverCodeLines(trimmed).map((line) => line.replace(/\s+/g, " ").trim());
   const convertedText = result.standardLines.join("\n");
   setEditValue(convertedText);
 
   if (normalizedOriginal.join("\n") === convertedText) {
-    appendLog(`代码已是目标格式：共 ${result.standardLines.length} 行`, "info");
+    appendLog(`右侧内容已是标准代码：共 ${result.standardLines.length} 行`, "info");
     return;
   }
 
-  appendLog(`已执行格式转换：共 ${result.standardLines.length} 行`, "success");
+  appendLog(`已将右侧原始代码清理并转换为标准代码：共 ${result.standardLines.length} 行`, "success");
 };
 
-export const handleFormatCheckAction = (
+const validateFormattedDriverCode = (text: string, options?: { requireDsc0A?: boolean }) => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return {
+      ok: false,
+      cleanedLines: [] as string[],
+      errors: ["左侧没有可检查的格式化代码"],
+    };
+  }
+
+  const result = checkCodeFormatting(trimmed);
+  const normalizedLines = result.cleanedLines.map((line) => line.replace(/\s+/g, " ").trim());
+  const errors = [...result.errors];
+  const warnings = [...(result.warnings ?? [])];
+
+  if (options?.requireDsc0A) {
+    const has0ALine = normalizedLines.some((line) => line.split(" ").filter(Boolean)[0] === "0A");
+    if (!has0ALine) {
+      errors.push("当前已启用 DSC，但左侧初始化代码中未找到 DT=0A 的数据行。请补充 0A 命令后再执行 OLED 配置下载。");
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    cleanedLines: normalizedLines,
+    errors,
+    warnings,
+  };
+};
+
+export const handleVismpwrCheckAction = (
   value: string,
   selectedIndex: number,
   syncDriverCodeText: (nextDriverCode: string[]) => void,
   setSelectedIndex: (value: number) => void,
-  setEditValue: (value: string) => void,
   appendLog: AppendLog,
 ) => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    appendLog("没有可检查的初始化代码", "warning");
-    return;
-  }
-
-  const result = checkCodeFormatting(trimmed);
+  const result = validateFormattedDriverCode(value);
   if (!result.ok) {
     result.errors.forEach((error) => appendLog(error, "error"));
-    appendLog(`格式检查，共发现 ${result.errors.length} 处问题`, "error");
+    result.warnings?.forEach((warning) => appendLog(warning, "warning"));
+    appendLog(`vismpwr检查未通过：共 ${result.errors.length} 处问题`, "error");
     return;
   }
 
-  const normalizedLines = result.cleanedLines.map((line) => line.replace(/\s+/g, " ").trim());
-  syncDriverCodeText(normalizedLines);
-  if (normalizedLines.length > 0) {
-    const nextIndex = Math.min(selectedIndex, normalizedLines.length - 1);
+  result.warnings?.forEach((warning) => appendLog(warning, "warning"));
+  syncDriverCodeText(result.cleanedLines);
+  if (result.cleanedLines.length > 0) {
+    const nextIndex = Math.min(selectedIndex, result.cleanedLines.length - 1);
     setSelectedIndex(nextIndex);
-    setEditValue(normalizedLines[nextIndex]);
   }
-  appendLog(`代码检查通过：共 ${normalizedLines.length} 行`, "success");
+  if ((result.warnings?.length ?? 0) > 0) {
+    appendLog(`vismpwr检查通过，但检测到 ${result.warnings?.length ?? 0} 处建议人工确认的写法`, "warning");
+    return;
+  }
+
+  appendLog(`vismpwr检查通过：共 ${result.cleanedLines.length} 行格式化代码`, "success");
 };
 
 export const applyOledConfig = async (
@@ -115,6 +153,7 @@ export const applyOledConfig = async (
   options: {
     silent?: boolean;
     expandBasicSection?: boolean;
+    syncRightEditor?: boolean;
     setTiming: (value: TimingConfig) => void;
     setShowBasicSection: (value: boolean) => void;
     syncDriverCodeText: (nextDriverCode: string[]) => void;
@@ -164,22 +203,34 @@ export const applyOledConfig = async (
   }
   options.syncDriverCodeText(result.init_codes);
   options.setSelectedIndex(0);
-  options.setEditValue(result.init_codes[0] || "");
+  if (options.syncRightEditor) {
+    options.setEditValue(result.init_codes[0] || "");
+  }
   options.persistRecentConfig(result.path || path);
   if (!options.silent) {
     options.appendLog(`已加载 OLED 配置：${result.path || path}（${result.init_codes.length} 行初始化代码）`, "success");
   }
 };
 
-export const handleGenerateConfigDownloadAction = async (
+const buildValidatedTimingRequest = (
   timing: TimingConfig,
   driverCode: string[],
   appendLog: AppendLog,
 ) => {
   if (driverCode.length === 0) {
-    appendLog("左侧没有可用于生成 OLED config bin 的格式化代码", "warning");
-    return;
+    appendLog("左侧没有可用于生成 OLED 配置的格式化代码", "warning");
+    return null;
   }
+
+  const validation = validateFormattedDriverCode(driverCode.join("\n"), {
+    requireDsc0A: timing.dscEnable,
+  });
+  if (!validation.ok) {
+    validation.errors.forEach((error) => appendLog(error, "error"));
+    return null;
+  }
+
+  validation.warnings?.forEach((warning) => appendLog(warning, "warning"));
 
   const request: TimingBinRequest = {
     pclk: timing.pclk,
@@ -207,41 +258,84 @@ export const handleGenerateConfigDownloadAction = async (
     slice_height: timing.sliceHeight,
     scrambling_enable: timing.scramblingEnable,
     data_swap: timing.dataSwap,
-    init_codes: driverCode,
+    init_codes: validation.cleanedLines,
   };
 
+  return request;
+};
+
+export const handleGenerateConfigDownloadAction = async (
+  timing: TimingConfig,
+  driverCode: string[],
+  appendLog: AppendLog,
+  debugMode = false,
+) => {
+  const request = buildValidatedTimingRequest(timing, driverCode, appendLog);
+  if (!request) {
+    appendLog("OLED 配置下载已中止：请先修正左侧格式化代码后再重试", "error");
+    return;
+  }
+
   try {
-    const result = await tauriInvoke<CommandResult>("generate_timing_bin", { request });
-    if (result.success) {
-      appendLog(`已生成 OLED config bin：${result.output}`, "success");
-    } else {
-      appendLog(result.error || result.output || "生成 OLED config bin 失败", "error");
+    if (debugMode) {
+      appendLog("-> generate vis-timing.bin + adb push /vismm/vis-timing.bin + repack_initrd.sh && sync + reboot", "debug");
     }
+    const payload: DownloadOledConfigPayload = { request };
+    const result = await tauriInvoke<CommandResult>("download_oled_config_and_reboot", { payload });
+    if (!result.success) {
+      appendLog(result.error || result.output || "初始化配置下载失败", "error");
+      return;
+    }
+    appendLog(result.output || "初始化配置下载完成并重启设备", "success");
   } catch (error) {
-    appendLog(`生成 OLED config bin 异常: ${String(error)}`, "error");
+    appendLog(`初始化配置下载异常: ${String(error)}`, "error");
   }
 };
 
-export const handleMoveLeftToRightAction = (value: string, setEditValue: (value: string) => void, appendLog: AppendLog) => {
+export const handleExportOledConfigJsonAction = async (
+  timing: TimingConfig,
+  driverCode: string[],
+  appendLog: AppendLog,
+) => {
+  const request = buildValidatedTimingRequest(timing, driverCode, appendLog);
+  if (!request) {
+    appendLog("导出 OLED 配置已中止：请先修正左侧格式化代码后再重试", "error");
+    return;
+  }
+
+  try {
+    const payload: ExportOledConfigJsonPayload = { request };
+    const result = await tauriInvoke<CommandResult>("export_oled_config_json", { payload });
+    if (!result.success) {
+      appendLog(result.error || result.output || "导出 OLED 配置 JSON 失败", "error");
+      return;
+    }
+    appendLog(result.output || "OLED 配置 JSON 导出成功", "success");
+  } catch (error) {
+    appendLog(`导出 OLED 配置 JSON 异常: ${String(error)}`, "error");
+  }
+};
+
+export const handleFormattedToStandardAction = (value: string, setEditValue: (value: string) => void, appendLog: AppendLog) => {
   const trimmed = value.trim();
   if (!trimmed) {
-    appendLog("左侧文本框为空，无法转换到右侧", "warning");
+    appendLog("左侧没有可转换到右侧的格式化代码", "warning");
     return;
   }
 
   const result = convertFormattedToStandardCode(trimmed);
   if (!result.ok) {
     result.errors.forEach((error) => appendLog(error, "error"));
-    appendLog(`左侧内容转换失败：共 ${result.errors.length} 处问题`, "error");
+    appendLog(`左到右转换失败：共 ${result.errors.length} 处问题`, "error");
     return;
   }
 
   const convertedText = result.standardLines.join("\n");
   setEditValue(convertedText);
-  appendLog(`已将左侧内容转换并填充到右侧：共 ${result.standardLines.length} 行`, "success");
+  appendLog(`已将左侧格式化代码还原为标准代码并填充到右侧：共 ${result.standardLines.length} 行`, "success");
 };
 
-export const handleMoveRightToLeftAction = (
+export const handleStandardToFormattedAction = (
   value: string,
   syncDriverCodeText: (nextDriverCode: string[]) => void,
   setDriverCode: (next: string[]) => void,
@@ -250,26 +344,26 @@ export const handleMoveRightToLeftAction = (
 ) => {
   const trimmed = value.trim();
   if (!trimmed) {
-    appendLog("没有可添加的初始化代码", "warning");
+    appendLog("右侧没有可推送到左侧的原始代码", "warning");
     return;
   }
 
   try {
     const converted = convertRightTextToInitCode(trimmed);
     if (converted.length === 0) {
-      appendLog("没有可添加的初始化代码", "warning");
+      appendLog("右侧没有可推送到左侧的格式化代码", "warning");
       return;
     }
     syncDriverCodeText(converted);
     setDriverCode(converted);
     setSelectedIndex(converted.length - 1);
-    appendLog(`已生成初始化代码并填充到左侧文本框：共 ${converted.length} 行`, "success");
+    appendLog(`已将右侧内容清理并转换为格式化代码后填充到左侧：共 ${converted.length} 行`, "success");
   } catch (error) {
-    appendLog(error instanceof Error ? error.message : `添加初始化代码失败: ${String(error)}`, "error");
+    appendLog(error instanceof Error ? error.message : `右到左转换失败: ${String(error)}`, "error");
   }
 };
 
-export const handleSendAllAction = async (sourceText: string, debugMode: boolean, appendLog: AppendLog) => {
+export const handleSendRightEditorAction = async (sourceText: string, debugMode: boolean, appendLog: AppendLog) => {
   const trimmed = sourceText.trim();
   if (!trimmed) {
     appendLog("右侧文本框为空，无法代码下发", "warning");

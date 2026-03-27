@@ -113,3 +113,11 @@ export interface ReadStatusResult {
   output?: string;
   error?: string;
 }
+
+export interface DownloadOledConfigPayload {
+  request: TimingBinRequest;
+}
+
+export interface ExportOledConfigJsonPayload {
+  request: TimingBinRequest;
+}

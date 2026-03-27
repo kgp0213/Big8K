@@ -48,7 +48,7 @@ const groupMap: Record<string, RailGroup> = {
   VGL: "gate",
 };
 
-export default function I2CTab() {
+export default function PowerRailsTab() {
   const { appendLog, debugMode } = useConnection();
   const [selectedChannel, setSelectedChannel] = useState("i2c4m2");
   const [readResult, _setReadResult] = useState("");
@@ -193,9 +193,7 @@ export default function I2CTab() {
           {rail.note && <div>{rail.note}</div>}
         </div>
       )}
-      <div className="mt-3 flex justify-end">
-        <button className="btn-secondary text-xs px-2 py-1">刷新</button>
-      </div>
+      <div className="mt-3 text-[11px] text-gray-500 dark:text-gray-400">当前页以“读取全部电源轨”为主，单路刷新按钮暂未开放。</div>
     </div>
   );
 
@@ -206,7 +204,7 @@ export default function I2CTab() {
           <div className="panel">
             <div className="panel-header flex items-center gap-2">
               <Cpu className="w-4 h-4" />
-              I2C通道
+              电源读取通道
             </div>
             <div className="panel-body space-y-2">
               {channels.map((ch) => (

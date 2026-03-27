@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 
 from pathlib import Path
+import sys
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-WIDTH = 3036
-HEIGHT = 1952
 FB_PATH = "/dev/fb0"
 TEXT = "卧槽"
 SUB_TEXT = "BIG8K POSTER MODE"
@@ -35,12 +34,15 @@ def to_bgra_bytes(img: Image.Image) -> bytes:
 
 
 def main():
-    base = Image.new("RGBA", (WIDTH, HEIGHT), (8, 0, 18, 255))
+    width = int(sys.argv[1]) if len(sys.argv) > 1 else 3036
+    height = int(sys.argv[2]) if len(sys.argv) > 2 else 1952
+    scale = min(width / 3036.0, height / 1952.0)
+    base = Image.new("RGBA", (width, height), (8, 0, 18, 255))
     draw = ImageDraw.Draw(base)
 
     # 背景渐变与暗角
-    for y in range(HEIGHT):
-        t = y / max(HEIGHT - 1, 1)
+    for y in range(height):
+        t = y / max(height - 1, 1)
         r = int(8 + 40 * t)
         g = int(0 + 10 * t)
         b = int(18 + 90 * t)

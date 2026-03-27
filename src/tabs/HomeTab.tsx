@@ -1,38 +1,9 @@
-import { Plug, Wifi, Monitor, Terminal, Play, UploadCloud, Image, Video, FileCode, Settings, Factory, Cpu, RefreshCw, Link2, Activity } from "lucide-react";
+import { Plug, Wifi, Monitor, Terminal, Cpu, Link2, Activity } from "lucide-react";
 import { useConnection } from "../App";
 
-const cardClass = "panel flex flex-col gap-3";
-
-const quickActions = [
-  { icon: Play, label: "一键推送 Pattern", hint: "把当前 Pattern/脚本一并下发" },
-  { icon: UploadCloud, label: "上传素材", hint: "图片 / 视频 / 字体" },
-  { icon: Terminal, label: "执行调试脚本", hint: "触发上次保存的脚本" },
-  { icon: Settings, label: "切换屏参 (timing.bin)", hint: "选择并下发 timing.bin" },
-  { icon: Factory, label: "开机自启配置", hint: "设置哪段脚本在设备重启后运行" },
-];
-
-const patternPresets = [
-  { name: "色块循环", desc: "RGB+灰阶 12 组", type: "pattern" },
-  { name: "网点排查", desc: "8×8 单像素切换", type: "pattern" },
-  { name: "文字标定", desc: "指定字体/字号", type: "pattern" },
-];
-
 const runtimeInfo = {
-  resolution: "3036 × 1952",
-  pclk: "150560 kHz",
-  horizontal: "HFP 200 / HBP 36 / HS 2 / HSA 2",
-  vertical: "VFP 62 / VBP 36 / VS 2 / VSA 2",
-  lanes: "4 lane",
-  format: "RGB888",
-  dsc: "Enable · v1.1 · 1518 × 8 · 2 slices",
-  source: "ADB连接后可从设备日志中读取，仅供参考",
+  source: "当前页仅展示连接摘要与最近日志；实际屏参以连接面板和点屏配置页为准。",
 };
-
-const resourceStats = [
-  { icon: Image, label: "图片素材", path: "/vismm/fbshow/bmp_online", count: "12 个" },
-  { icon: Video, label: "视频素材", path: "/vismm/fbshow/movie_online", count: "5 个" },
-  { icon: FileCode, label: "脚本目录", path: "/vismm/program", count: "9 个" },
-];
 
 export default function HomeTab() {
   const { connection, logs } = useConnection();
@@ -60,22 +31,8 @@ export default function HomeTab() {
               </div>
               <div className={`text-sm font-semibold ${statusColor}`}>{statusText}</div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <div className="text-xs text-gray-500 mb-1">当前屏参</div>
-                <div className="text-lg font-semibold text-gray-800 dark:text-gray-100">3036 × 1952 @150.56MHz</div>
-                <div className="text-xs text-gray-500">DSC v1.1 · 2 Slice</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">驱动脚本</div>
-                <div className="text-lg font-semibold text-gray-800 dark:text-gray-100">槽位 #1</div>
-                <div className="text-xs text-gray-500">晨检脚本 (自动推 Pattern)</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">素材缓存</div>
-                <div className="text-lg font-semibold text-gray-800 dark:text-gray-100">17 项</div>
-                <div className="text-xs text-gray-500">图片 12 · 视频 5</div>
-              </div>
+            <div className="panel-body text-sm text-gray-600 dark:text-gray-300">
+              当前页保留连接摘要、使用说明和最近日志，避免展示与设备实际状态不一致的固定样板数据。
             </div>
           </div>
 
@@ -126,52 +83,6 @@ export default function HomeTab() {
             </div>
           </div>
 
-          <div className={cardClass}>
-            <div className="panel-header flex items-center gap-2">
-              <Plug className="w-4 h-4" />
-              快捷操作
-            </div>
-            <div className="grid grid-cols-5 gap-3">
-              {quickActions.map((action) => (
-                <button key={action.label} className="rounded-xl border border-gray-200 dark:border-gray-700 p-3 text-left hover:border-primary-500 hover:bg-primary-50/50 dark:hover:bg-primary-900/20 transition-colors">
-                  <action.icon className="w-4 h-4 text-primary-500 mb-2" />
-                  <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{action.label}</div>
-                  <div className="text-xs text-gray-500 mt-1">{action.hint}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="panel-header flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Image className="w-4 h-4" />
-                Pattern / 资源联动
-              </div>
-              <button className="btn-secondary text-xs">打开素材目录</button>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                {patternPresets.map((item) => (
-                  <div key={item.name} className="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
-                    <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{item.name}</div>
-                    <div className="text-xs text-gray-500">{item.desc}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="space-y-2">
-                {resourceStats.map((stat) => (
-                  <div key={stat.label} className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{stat.label}</div>
-                      <div className="text-xs text-gray-500">{stat.path}</div>
-                    </div>
-                    <div className="text-sm text-gray-500">{stat.count}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
         </div>
 
         <div className="col-span-5 space-y-4">
@@ -208,17 +119,12 @@ export default function HomeTab() {
           </div>
 
           <div className="panel">
-            <div className="panel-header flex items-center gap-2"><Cpu className="w-4 h-4" />当前屏参摘要（ADB参考）</div>
-            <div className="panel-body space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">分辨率</span><span>{runtimeInfo.resolution}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">PCLK</span><span>{runtimeInfo.pclk}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Horizontal</span><span>{runtimeInfo.horizontal}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Vertical</span><span>{runtimeInfo.vertical}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Lanes</span><span>{runtimeInfo.lanes}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Format</span><span>{runtimeInfo.format}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">DSC</span><span>{runtimeInfo.dsc}</span></div>
+            <div className="panel-header flex items-center gap-2"><Cpu className="w-4 h-4" />使用说明</div>
+            <div className="panel-body space-y-2 text-sm text-gray-600 dark:text-gray-300">
+              <p>· 连接信息与屏幕分辨率以右侧连接面板为准。</p>
+              <p>· 点屏参数、MIPI 指令和初始化代码请在“点屏配置”页维护。</p>
+              <p>· 图片与测试图案请在“显示画面”页操作；脚本更新通过手动“同步画面”完成。</p>
               <div className="pt-2 text-xs text-gray-500 dark:text-gray-400">{runtimeInfo.source}</div>
-              <button className="w-full btn-secondary text-sm flex items-center justify-center gap-2 mt-2"><RefreshCw className="w-4 h-4" />ADB 读取当前屏参</button>
             </div>
           </div>
 

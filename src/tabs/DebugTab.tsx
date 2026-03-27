@@ -1,118 +1,118 @@
-import { useState } from "react";
-import { Terminal, Send, Trash2, Copy, Download } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Code } from "lucide-react";
+import { useConnection } from "../App";
+import CodeConvertTab from "./CodeConvertTab";
+import {
+  DebugCommandPresetPanel,
+  DebugMultiCommandPanel,
+  checkDebugCommand,
+  sendCommandPreset,
+  sendDebugCommand,
+  loadCommandPresets,
+  saveCommandPresets,
+  DEBUG_SUB_TABS,
+  createDefaultCommandPresets,
+} from "../features/debug";
+import { loadMultiCommands, saveMultiCommands } from "../features/debug/textState";
+import type { CommandPresetItem, DebugSubTab } from "../features/debug";
+
 
 export default function DebugTab() {
-  const [command, setCommand] = useState("");
-  const [history, setHistory] = useState<string[]>([
-    "> vismpwr 05 00 01 28",
-    "< OK",
-    "> cat /proc/chenfeng_mipi/chenfeng_mipi",
-    "< 01 02 03 04 05 06 07 08",
-    "> ls -la /vismm/fbshow/",
-    "< total 128",
-    "< drwxr-xr-x 2 root root 4096 Mar 13 14:30 .",
-    "< drwxr-xr-x 5 root root 4096 Mar 13 14:30 ..",
-    "< -rwxr-xr-x 1 root root 24576 Mar 13 14:30 fbShowBmp",
-  ]);
+  const { connection, appendLog, debugMode } = useConnection();
+  const [activeSubTab, setActiveSubTab] = useState<DebugSubTab>("multi");
+  const [multiCommands, setMultiCommands] = useState<string[]>(() => loadMultiCommands(4));
+  const [commandPresets, setCommandPresets] = useState<CommandPresetItem[]>(createDefaultCommandPresets(30));
+  const [selectedPresetIndex, setSelectedPresetIndex] = useState(0);
+  const saveTimerRef = useRef<number | null>(null);
 
-  const handleSend = () => {
-    if (command.trim()) {
-      setHistory([...history, `> ${command}`]);
-      setCommand("");
+  const isConnected = connection.connected && connection.type === "adb";
+
+  const scheduleSave = (items: CommandPresetItem[]) => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
     }
+    saveTimerRef.current = window.setTimeout(() => {
+      void saveCommandPresets(items, appendLog);
+    }, 400);
   };
 
+  useEffect(() => {
+    void (async () => {
+      const items = await loadCommandPresets(appendLog);
+      setCommandPresets(items);
+      setSelectedPresetIndex(0);
+    })();
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (commandPresets.length > 0) {
+      scheduleSave(commandPresets);
+    }
+  }, [commandPresets]);
+
+  useEffect(() => {
+    saveMultiCommands(multiCommands);
+  }, [multiCommands]);
+
+  const renderMultiWindow = () => (
+    <DebugMultiCommandPanel
+      commands={multiCommands}
+      onChange={(index: number, value: string) => {
+        const next = [...multiCommands];
+        next[index] = value;
+        setMultiCommands(next);
+      }}
+      onCheck={(index) => checkDebugCommand(multiCommands[index] || "", index, appendLog)}
+      onSend={(index) => sendDebugCommand(multiCommands[index] || "", index, isConnected, debugMode, appendLog)}
+    />
+  );
+
+  const renderList = () => (
+    <DebugCommandPresetPanel
+      items={commandPresets}
+      selectedIndex={selectedPresetIndex}
+      onSelect={setSelectedPresetIndex}
+      onRename={(value: string) => {
+        const next = commandPresets.map((item, idx) =>
+          idx === selectedPresetIndex ? { ...item, name: value } : item
+        );
+        setCommandPresets(next);
+      }}
+      onContentChange={(value: string) => {
+        const next = commandPresets.map((item, idx) =>
+          idx === selectedPresetIndex ? { ...item, content: value } : item
+        );
+        setCommandPresets(next);
+      }}
+      onSend={() => sendCommandPreset(commandPresets[selectedPresetIndex], isConnected, debugMode, appendLog)}
+    />
+  );
+
   return (
-    <div className="h-full flex flex-col gap-4">
-      {/* 命令历史 */}
-      <div className="panel flex-1">
-        <div className="panel-header flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4" />
-            命令输出
-          </div>
-          <div className="flex gap-1">
-            <button className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700" title="复制">
-              <Copy className="w-4 h-4" />
-            </button>
-            <button className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700" title="导出">
-              <Download className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setHistory([])}
-              className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-red-600"
-              title="清空"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-        <div className="panel-body p-0">
-          <div className="h-96 overflow-auto bg-gray-900 p-4 font-mono text-sm">
-            {history.length === 0 ? (
-              <div className="text-gray-500">等待命令...</div>
-            ) : (
-              history.map((line, idx) => (
-                <div
-                  key={idx}
-                  className={`mb-1 ${
-                    line.startsWith(">")
-                      ? "text-green-400"
-                      : line.startsWith("<")
-                      ? "text-blue-400"
-                      : "text-gray-300"
-                  }`}
-                >
-                  {line}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+    <div className="space-y-4">
+      <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 pb-2">
+        {DEBUG_SUB_TABS.map((tab: { id: DebugSubTab; label: string }) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveSubTab(tab.id)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeSubTab === tab.id
+                ? "bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300"
+                : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+            }`}
+          >
+            {tab.id === "convert" && <Code className="w-4 h-4" />}
+            {tab.label}
+          </button>
+        ))}
       </div>
 
-      {/* 命令输入 */}
-      <div className="panel">
-        <div className="panel-body">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSend()}
-              className="input font-mono flex-1"
-              placeholder="输入命令..."
-            />
-            <button
-              onClick={handleSend}
-              className="btn-primary flex items-center gap-2 px-6"
-            >
-              <Send className="w-4 h-4" />
-              发送
-            </button>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <span className="text-xs text-gray-500 dark:text-gray-400 py-1">快捷命令:</span>
-            {[
-              "vismpwr 05 00 01 28",
-              "vismpwr 05 00 01 10",
-              "vismpwr 05 00 01 11",
-              "vismpwr 05 00 01 29",
-              "cat /proc/chenfeng_mipi/chenfeng_mipi",
-              "ls -la /vismm/fbshow/",
-              "reboot",
-            ].map((cmd) => (
-              <button
-                key={cmd}
-                onClick={() => setCommand(cmd)}
-                className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded"
-              >
-                {cmd.length > 25 ? cmd.slice(0, 25) + "..." : cmd}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+      {activeSubTab === "multi" && renderMultiWindow()}
+      {activeSubTab === "list" && renderList()}
+      {activeSubTab === "convert" && <CodeConvertTab />}
     </div>
   );
 }
