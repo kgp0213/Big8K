@@ -274,20 +274,34 @@ cargo --version
 
 ### 6.7 如何在编译时启用 SSH
 
-如果你需要真正使用 SSH 连接板卡，请在 `src-tauri` 目录下显式带 feature 编译。
+如果你需要真正使用 SSH 连接板卡，请在 Rust / Tauri 构建阶段显式带上 `ssh` feature。
 
-#### 开发调试（启用 SSH）
+#### 开发调试（启用 SSH，直接走 Cargo）
 
 ```bash
 cd src-tauri
 cargo run --features ssh --bin Big8K
 ```
 
-#### 生成 release 可执行文件（启用 SSH）
+#### 生成 release 可执行文件（启用 SSH，直接走 Cargo）
 
 ```bash
 cd src-tauri
 cargo build --release --features ssh --bin Big8K
+```
+
+#### 通过 Tauri CLI 开发运行（启用 SSH）
+
+如果你希望继续从项目根目录使用 Tauri CLI，也可以这样写：
+
+```bash
+npm run tauri dev -- --features ssh
+```
+
+#### 通过 Tauri CLI 打包（启用 SSH）
+
+```bash
+npm run tauri build -- --features ssh
 ```
 
 生成产物通常位于：
@@ -296,7 +310,74 @@ cargo build --release --features ssh --bin Big8K
 src-tauri/target/release/Big8K.exe
 ```
 
-如果你走 Tauri 的整套打包流程，也建议确保底层 Rust 构建阶段带上 `ssh` feature；否则打出来的包仍然是不含 SSH 能力的版本。
+如果你不带 `--features ssh`，那么即使前端和 Tauri 打包流程都正常完成，最终产物仍然是**不含 SSH 能力**的版本。
+
+### 6.8 ADB-only / SSH-enabled 构建对照
+
+为了避免拿到源码的人搞不清楚，最常见可以直接分成两种构建方式：
+
+#### ADB-only 构建（默认）
+
+适用场景：
+
+- 只需要 ADB 调试
+- 只做点屏 / framebuffer / MIPI 指令测试
+- 不想额外引入 SSH 相关依赖
+
+命令示例：
+
+```bash
+npm install
+npm run tauri dev
+```
+
+或：
+
+```bash
+npm install
+npm run tauri build
+```
+
+特点：
+
+- 默认可直接编译
+- SSH 按钮/流程若被调用，会提示“当前构建未启用 SSH 功能”
+- 更适合大多数只连 ADB 的日常开发环境
+
+#### SSH-enabled 构建（按需启用）
+
+适用场景：
+
+- 需要通过 SSH 连板卡
+- 需要执行板端 shell 命令
+- 需要 ADB + SSH 混合调试
+
+命令示例：
+
+```bash
+npm install
+npm run tauri dev -- --features ssh
+```
+
+或：
+
+```bash
+npm install
+npm run tauri build -- --features ssh
+```
+
+也可以直接走 Cargo：
+
+```bash
+cd src-tauri
+cargo build --release --features ssh --bin Big8K
+```
+
+特点：
+
+- 编译产物包含 SSH 能力
+- 可正常使用 `ssh_connect` / `ssh_exec` 等后端命令
+- 更适合需要真正远程登录板卡的联调环境
 
 ## 7. 安装依赖
 
