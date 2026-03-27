@@ -1,9 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Usb, Wifi, Activity, Power, RefreshCw, CheckCircle, XCircle, Link, Cpu, MonitorSmartphone } from "lucide-react";
+import { Activity, MonitorSmartphone } from "lucide-react";
 import { useConnection } from "../App";
 import { tauriInvoke } from "../utils/tauri";
-import { DEFAULT_SCREEN_RESOLUTION, LAST_SUCCESSFUL_SSH_IP_KEY, SSH_ENDPOINTS } from "../features/connection/constants";
-import { getAdbStatusBadgeClass, getAdbStatusLabel, getAdbStatusTone } from "../features/connection/helpers";
+import { LAST_SUCCESSFUL_SSH_IP_KEY, SSH_ENDPOINTS } from "../features/connection/constants";
+import { getAdbStatusLabel } from "../features/connection/helpers";
+import AdbConnectionCard from "../features/connection/AdbConnectionCard";
+import SshConnectionCard from "../features/connection/SshConnectionCard";
+import LogPanel from "../features/connection/LogPanel";
 import type { ActionResult, AdbDevice, AdbDevicesResult, ConnectionPanelProps, DeviceProbeResult } from "../features/connection/types";
 
 export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProps) {
@@ -441,174 +444,44 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
       </div>
 
       {activeConnection === "adb" && (
-        <div className="panel">
-          <div className="panel-header flex items-center gap-2">
-            <Usb className="w-4 h-4" />
-            ADB设备管理
-            <span
-              className={`ml-auto px-2 py-0.5 text-xs rounded-full flex items-center gap-1 ${
-                selectedDevice ? getAdbStatusBadgeClass(selectedDevice.status) : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
-              }`}
-            >
-              {selectedDevice ? (
-                getAdbStatusTone(selectedDevice.status) === "success" ? <CheckCircle className="w-3 h-3" /> : <Activity className="w-3 h-3" />
-              ) : (
-                <XCircle className="w-3 h-3" />
-              )}
-              {selectedDevice ? selectedDeviceStatusLabel : "未连接"}
-            </span>
-          </div>
-          <div className="panel-body space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">已发现设备</label>
-              <select value={deviceId} onChange={(e) => handleSelectDevice(e.target.value)} className="input text-sm" disabled={deviceList.length === 0}>
-                {deviceList.length === 0 ? (
-                  <option value="">未检测到设备</option>
-                ) : (
-                  deviceList.map((device) => (
-                    <option key={device.id} value={device.id}>
-                      {device.id} · {getAdbStatusLabel(device.status)}
-                    </option>
-                  ))
-                )}
-              </select>
-            </div>
-
-            {selectedDevice && (
-              <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 text-xs space-y-2">
-                <div className="flex items-center gap-2 font-medium text-gray-700 dark:text-gray-200">
-                  <Cpu className="w-3.5 h-3.5" />
-                  设备状态
-                </div>
-                <div>序列号：{selectedDevice.id}</div>
-                {connection.deviceModel ? <div>设备型号：{connection.deviceModel}</div> : null}
-                <div>屏幕分辨率：{connection.screenResolution || DEFAULT_SCREEN_RESOLUTION}</div>
-                {connection.bitsPerPixel ? <div>位深：{connection.bitsPerPixel}</div> : null}
-                <div>MIPI 类型：{connection.mipiMode || "未读取"}；MIPI Lane：{typeof connection.mipiLanes === "number" ? connection.mipiLanes : "未读取"}</div>
-                {selectedDevice.status === "unauthorized" && (
-                  <div className="rounded-lg border border-yellow-300 bg-yellow-50 px-2 py-2 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-200">
-                    请看一下设备屏幕，确认 USB 调试授权弹窗，然后手动点击刷新。
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">ADB over TCP 地址</label>
-              <div className="flex gap-2">
-                <input type="text" value={adbTcpAddress} onChange={(e) => setAdbTcpAddress(e.target.value)} placeholder="192.168.137.100:5555" className="input text-sm flex-1" />
-                <button onClick={handleAdbTcpConnect} disabled={checking} className="btn-secondary px-3">
-                  <Link className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <button onClick={adbConnected ? disconnectAdb : () => checkAdbConnection(false)} disabled={checking} className={`flex-1 btn ${adbConnected ? "btn-danger" : "btn-success"}`}>
-                <Power className="w-4 h-4 inline mr-1" />
-                {checking ? "处理中..." : adbConnected ? "断开" : "刷新并连接"}
-              </button>
-              <button onClick={() => checkAdbConnection(false)} disabled={checking} className="btn-secondary px-3">
-                <RefreshCw className={`w-4 h-4 ${checking ? "animate-spin" : ""}`} />
-              </button>
-            </div>
-          </div>
-        </div>
+        <AdbConnectionCard
+          checking={checking}
+          adbConnected={adbConnected}
+          deviceId={deviceId}
+          deviceList={deviceList}
+          adbTcpAddress={adbTcpAddress}
+          selectedDevice={selectedDevice}
+          selectedDeviceStatusLabel={selectedDeviceStatusLabel}
+          connection={connection}
+          onSelectDevice={handleSelectDevice}
+          onAdbTcpAddressChange={setAdbTcpAddress}
+          onAdbTcpConnect={handleAdbTcpConnect}
+          onRefreshOrConnect={() => checkAdbConnection(false)}
+          onRefresh={() => checkAdbConnection(false)}
+          onDisconnect={disconnectAdb}
+        />
       )}
 
       {activeConnection === "ssh" && (
-        <div className="panel">
-          <div className="panel-header flex items-center gap-2">
-            <Wifi className="w-4 h-4" />
-            SSH连接
-            <span
-              className={`ml-auto px-2 py-0.5 text-xs rounded-full flex items-center gap-1 ${
-                netConnected
-                  ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
-                  : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
-              }`}
-            >
-              {netConnected ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-              {netConnected ? "已连接" : "未连接"}
-            </span>
-          </div>
-          <div className="panel-body space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-xl border border-gray-200 dark:border-gray-700 px-3 py-2 bg-gray-50/70 dark:bg-gray-800/60">
-                <div className="text-[11px] text-gray-500 dark:text-gray-400">当前目标</div>
-                <div className="mt-1 text-sm font-semibold text-gray-800 dark:text-gray-100">{ipAddress}</div>
-              </div>
-              <div className="rounded-xl border border-gray-200 dark:border-gray-700 px-3 py-2 bg-gray-50/70 dark:bg-gray-800/60">
-                <div className="text-[11px] text-gray-500 dark:text-gray-400">上次成功</div>
-                <div className="mt-1 text-sm font-semibold text-gray-800 dark:text-gray-100">{lastSuccessfulSshIp || "暂无"}</div>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">8K平台网址</label>
-              <select value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} className="input text-sm">
-                {SSH_ENDPOINTS.map((item) => (
-                  <option key={item.host} value={item.host}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={netConnected ? disconnectSsh : checkSshConnection} disabled={checking} className={`flex-1 btn ${netConnected ? "btn-danger" : "btn-success"}`}>
-                <Power className="w-4 h-4 inline mr-1" />
-                {checking ? "连接中..." : netConnected ? "断开" : "连接"}
-              </button>
-              <button onClick={checkSshConnection} disabled={checking} className="btn-secondary px-3">
-                <RefreshCw className={`w-4 h-4 ${checking ? "animate-spin" : ""}`} />
-              </button>
-            </div>
-          </div>
-        </div>
+        <SshConnectionCard
+          checking={checking}
+          netConnected={netConnected}
+          ipAddress={ipAddress}
+          lastSuccessfulSshIp={lastSuccessfulSshIp}
+          sshEndpoints={SSH_ENDPOINTS}
+          onIpAddressChange={setIpAddress}
+          onConnectOrDisconnect={netConnected ? disconnectSsh : checkSshConnection}
+          onRefresh={checkSshConnection}
+        />
       )}
 
-      <div className="panel">
-        <div className="panel-header flex items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <span>执行日志</span>
-            <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap select-none">
-              <input type="checkbox" checked={debugMode} onChange={(e) => setDebugMode(e.target.checked)} />
-              调试模式
-            </label>
-          </div>
-          <button onClick={handleClearLogs} className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
-            清空日志
-          </button>
-        </div>
-        <div className="panel-body">
-          <div ref={logContainerRef} className="space-y-1 overflow-auto max-h-56 text-xs">
-            {logs.length === 0 ? (
-              <div className="text-gray-400">暂无日志，后续 ADB / SSH / 屏幕操作会显示在这里。</div>
-            ) : (
-              logs.slice(-30).map((log) => (
-                <div key={log.id} className="flex gap-2 font-mono">
-                  <span className="text-gray-400">[{log.time}]</span>
-                  <span
-                    className={
-                      log.level === "error"
-                        ? "text-red-500"
-                        : log.level === "warning"
-                          ? "text-yellow-600"
-                          : log.level === "success"
-                            ? "text-green-600"
-                            : log.level === "debug"
-                              ? "text-blue-600 dark:text-blue-300"
-                              : "text-gray-700 dark:text-gray-200"
-                    }
-                  >
-                    {log.message}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
+      <LogPanel
+        logs={logs}
+        debugMode={debugMode}
+        onDebugModeChange={setDebugMode}
+        onClearLogs={handleClearLogs}
+        logContainerRef={logContainerRef}
+      />
 
       <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-3 text-xs text-gray-500 dark:text-gray-400 flex items-start gap-2">
         <MonitorSmartphone className="w-4 h-4 mt-0.5" />
