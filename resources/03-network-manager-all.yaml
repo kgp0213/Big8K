@@ -1,0 +1,13 @@
+# Let NetworkManager manage all devices on this system
+network:
+  ethernets:
+    enol: 
+      addresses: [192.168.137.100/24] 
+      dhcp4: false
+      optional: true
+      gateway4: 192.168.137.1
+      nameservers:
+        addresses: [192.168.137.1,114.114.114.114,8.8.8.8,8.8.4.4]
+  version: 2
+  renderer: NetworkManager
+  

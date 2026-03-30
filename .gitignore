@@ -19,6 +19,11 @@ Thumbs.db
 *.log
 *.txt
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
 # Local-only examples / scratch files
 examples/
 python/debug_cache_pull/
@@ -41,3 +46,8 @@ vite_run.log
 # Local env
 .env
 .env.local
+
+# Legacy directories at root (migrated to resources/deploy/)
+/fb_operate/
+/fb_RunApp/
+/dist-packages/

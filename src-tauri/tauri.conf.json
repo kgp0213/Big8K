@@ -26,6 +26,10 @@
     "targets": "all",
     "icon": [
       "../Icon/7.ico"
+    ],
+    "resources": [
+      "../resources/*",
+      "../fb_operate/*"
     ]
   },
   "plugins": {

@@ -16,24 +16,46 @@ import {
 import { loadMultiCommands, saveMultiCommands } from "../features/debug/textState";
 import type { CommandPresetItem, DebugSubTab } from "../features/debug";
 
+const PRESET_SAVE_DELAY_MS = 400;
+const MULTI_COMMAND_COUNT = 4;
+const PRESET_COUNT = 30;
 
 export default function DebugTab() {
   const { connection, appendLog, debugMode } = useConnection();
   const [activeSubTab, setActiveSubTab] = useState<DebugSubTab>("multi");
-  const [multiCommands, setMultiCommands] = useState<string[]>(() => loadMultiCommands(4));
-  const [commandPresets, setCommandPresets] = useState<CommandPresetItem[]>(createDefaultCommandPresets(30));
+  const [multiCommands, setMultiCommands] = useState<string[]>(() => loadMultiCommands(MULTI_COMMAND_COUNT));
+  const [commandPresets, setCommandPresets] = useState<CommandPresetItem[]>(createDefaultCommandPresets(PRESET_COUNT));
   const [selectedPresetIndex, setSelectedPresetIndex] = useState(0);
   const saveTimerRef = useRef<number | null>(null);
 
   const isConnected = connection.connected && connection.type === "adb";
 
-  const scheduleSave = (items: CommandPresetItem[]) => {
+  const clearScheduledSave = () => {
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
     }
+  };
+
+  const scheduleSave = (items: CommandPresetItem[]) => {
+    clearScheduledSave();
     saveTimerRef.current = window.setTimeout(() => {
       void saveCommandPresets(items, appendLog);
-    }, 400);
+    }, PRESET_SAVE_DELAY_MS);
+  };
+
+  const updateMultiCommand = (index: number, value: string) => {
+    setMultiCommands((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+  };
+
+  const updateSelectedPreset = (patch: Partial<CommandPresetItem>) => {
+    setCommandPresets((prev) =>
+      prev.map((item, idx) => (idx === selectedPresetIndex ? { ...item, ...patch } : item))
+    );
   };
 
   useEffect(() => {
@@ -42,8 +64,9 @@ export default function DebugTab() {
       setCommandPresets(items);
       setSelectedPresetIndex(0);
     })();
+
     return () => {
-      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      clearScheduledSave();
     };
   }, []);
 
@@ -56,40 +79,6 @@ export default function DebugTab() {
   useEffect(() => {
     saveMultiCommands(multiCommands);
   }, [multiCommands]);
-
-  const renderMultiWindow = () => (
-    <DebugMultiCommandPanel
-      commands={multiCommands}
-      onChange={(index: number, value: string) => {
-        const next = [...multiCommands];
-        next[index] = value;
-        setMultiCommands(next);
-      }}
-      onCheck={(index) => checkDebugCommand(multiCommands[index] || "", index, appendLog)}
-      onSend={(index) => sendDebugCommand(multiCommands[index] || "", index, isConnected, debugMode, appendLog)}
-    />
-  );
-
-  const renderList = () => (
-    <DebugCommandPresetPanel
-      items={commandPresets}
-      selectedIndex={selectedPresetIndex}
-      onSelect={setSelectedPresetIndex}
-      onRename={(value: string) => {
-        const next = commandPresets.map((item, idx) =>
-          idx === selectedPresetIndex ? { ...item, name: value } : item
-        );
-        setCommandPresets(next);
-      }}
-      onContentChange={(value: string) => {
-        const next = commandPresets.map((item, idx) =>
-          idx === selectedPresetIndex ? { ...item, content: value } : item
-        );
-        setCommandPresets(next);
-      }}
-      onSend={() => sendCommandPreset(commandPresets[selectedPresetIndex], isConnected, debugMode, appendLog)}
-    />
-  );
 
   return (
     <div className="space-y-4">
@@ -110,8 +99,26 @@ export default function DebugTab() {
         ))}
       </div>
 
-      {activeSubTab === "multi" && renderMultiWindow()}
-      {activeSubTab === "list" && renderList()}
+      {activeSubTab === "multi" && (
+        <DebugMultiCommandPanel
+          commands={multiCommands}
+          onChange={updateMultiCommand}
+          onCheck={(index) => checkDebugCommand(multiCommands[index] || "", index, appendLog)}
+          onSend={(index) => sendDebugCommand(multiCommands[index] || "", index, isConnected, debugMode, appendLog)}
+        />
+      )}
+
+      {activeSubTab === "list" && (
+        <DebugCommandPresetPanel
+          items={commandPresets}
+          selectedIndex={selectedPresetIndex}
+          onSelect={setSelectedPresetIndex}
+          onRename={(value: string) => updateSelectedPreset({ name: value })}
+          onContentChange={(value: string) => updateSelectedPreset({ content: value })}
+          onSend={() => sendCommandPreset(commandPresets[selectedPresetIndex], isConnected, debugMode, appendLog)}
+        />
+      )}
+
       {activeSubTab === "convert" && <CodeConvertTab />}
     </div>
   );

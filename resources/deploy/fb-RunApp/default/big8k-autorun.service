@@ -1,0 +1,10 @@
+[Unit]
+Description=Big8K autorun Python script at startup
+After=network.target
+ 
+[Service]
+Type=idle
+ExecStart=/bin/bash -c 'if [ -f /vismm/autorun.py ]; then /usr/bin/python3 /vismm/autorun.py; elif [ -f /vismm/fbshow/autorun.py ]; then /usr/bin/python3 /vismm/fbshow/autorun.py; else echo "Error: No autorun.py found in /vismm/ or /vismm/fbshow/"; exit 1; fi'
+ 
+[Install]
+WantedBy=multi-user.target

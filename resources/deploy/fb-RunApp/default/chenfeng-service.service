@@ -1,0 +1,12 @@
+[Unit]
+Description=Python script to run at startup
+After=network.target
+ 
+[Service]
+Type=idle
+# 使用 bash -c 进行条件判断，优先检查/vismm目录，再检查vismm/fbshow目录
+ExecStart=/bin/bash -c 'if [ -f /vismm/autorun.py ]; then /usr/bin/python3 /vismm/autorun.py; elif [ -f /vismm/fbshow/autorun.py ]; then /usr/bin/python3 /vismm/fbshow/autorun.py; else echo "Error: No autorun.py found in /vismm/ or /vismm/fbshow/"; exit 1; fi'
+
+ 
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Activity, MonitorSmartphone, Usb, Wifi } from "lucide-react";
 import { useConnection } from "../App";
-import { tauriInvoke } from "../utils/tauri";
+import { isTauri, tauriInvoke } from "../utils/tauri";
 import { LAST_SUCCESSFUL_SSH_IP_KEY, SSH_ENDPOINTS } from "../features/connection/constants";
 import { getAdbStatusLabel } from "../features/connection/helpers";
 import AdbConnectionCard from "../features/connection/AdbConnectionCard";
@@ -11,6 +11,7 @@ import type { ActionResult, AdbDevice, AdbDevicesResult, ConnectionPanelProps, D
 
 export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProps) {
   const { connection, setConnection, appendLog, debugMode, setDebugMode } = useConnection();
+  const browserPreview = !isTauri();
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
   const handleClearLogs = () => {
@@ -42,6 +43,53 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
 
   const selectedDevice = useMemo(() => deviceList.find((d) => d.id === deviceId), [deviceList, deviceId]);
   const selectedDeviceStatusLabel = useMemo(() => getAdbStatusLabel(selectedDevice?.status || ""), [selectedDevice]);
+
+  const enablePreviewAdb = (selectedId?: string) => {
+    const previewDevices: AdbDevice[] = [
+      { id: "BIG8K-DEMO-001", status: "device", model: "Big8K Demo Board" },
+      { id: "BIG8K-DEMO-002", status: "offline", model: "Big8K Spare Board" },
+    ];
+    const activeId = selectedId || previewDevices[0].id;
+    const activeDevice = previewDevices.find((device) => device.id === activeId) || previewDevices[0];
+
+    setDeviceList(previewDevices);
+    setDeviceId(activeDevice.id);
+    setAdbConnected(activeDevice.status === "device");
+    setNetConnected(false);
+    setConnection({
+      type: "adb",
+      connected: activeDevice.status === "device",
+      deviceId: activeDevice.id,
+      deviceModel: activeDevice.model,
+      screenResolution: "7680 × 4320",
+      bitsPerPixel: "24",
+      mipiMode: "video mode",
+      mipiLanes: 8,
+      fb0Available: true,
+      vismpwrAvailable: true,
+      python3Available: true,
+    });
+    appendLog(`浏览器预览：已载入 ADB 演示设备 ${activeDevice.id}`, "success");
+  };
+
+  const enablePreviewSsh = (host: string) => {
+    setNetConnected(true);
+    setAdbConnected(false);
+    setConnection({
+      type: "ssh",
+      ip: host,
+      connected: true,
+      deviceModel: "Big8K Demo Board",
+      screenResolution: "7680 × 4320",
+      bitsPerPixel: "24",
+      mipiMode: "video mode",
+      mipiLanes: 8,
+      fb0Available: true,
+      vismpwrAvailable: true,
+      python3Available: true,
+    });
+    appendLog(`浏览器预览：已模拟 SSH 连接 ${host}`, "success");
+  };
 
   const showMessage = (type: "success" | "error", text: string, silent = false) => {
     if (!silent) {
@@ -257,6 +305,11 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
     setDeviceId(selectedId);
     if (!selectedId) return;
 
+    if (browserPreview) {
+      enablePreviewAdb(selectedId);
+      return;
+    }
+
     try {
       if (debugMode) {
         appendLog(`-> adb target ${selectedId}`, "debug");
@@ -274,6 +327,13 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
   const handleAdbTcpConnect = async () => {
     if (!adbTcpAddress.trim()) {
       showMessage("error", "请输入 ADB 设备地址");
+      return;
+    }
+
+    if (browserPreview) {
+      enablePreviewAdb(adbTcpAddress.includes(":") ? adbTcpAddress : `${adbTcpAddress}:5555`);
+      setMessage({ type: "success", text: `浏览器预览：已模拟连接到 ${adbTcpAddress}` });
+      window.setTimeout(() => setMessage(null), 3000);
       return;
     }
 
@@ -299,6 +359,15 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
   };
 
   const disconnectAdb = async () => {
+    if (browserPreview) {
+      setAdbConnected(false);
+      setDeviceId("");
+      setDeviceList([]);
+      setConnection({ type: "disconnected", connected: false });
+      showMessage("success", "浏览器预览：已断开 ADB 演示连接");
+      return;
+    }
+
     try {
       if (debugMode) {
         appendLog("-> adb disconnect", "info");
@@ -314,6 +383,14 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
   };
 
   const checkSshConnection = async () => {
+    if (browserPreview) {
+      enablePreviewSsh(ipAddress);
+      window.localStorage.setItem(LAST_SUCCESSFUL_SSH_IP_KEY, ipAddress);
+      setLastSuccessfulSshIp(ipAddress);
+      showMessage("success", `浏览器预览：SSH 演示连接成功 ${ipAddress}`);
+      return;
+    }
+
     setChecking(true);
     setMessage(null);
     appendLog(`任务开始 -> SSH 连接检查`, "info");
@@ -351,7 +428,7 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
   const disconnectSsh = () => {
     setNetConnected(false);
     setConnection({ type: "disconnected", connected: false });
-    showMessage("success", "已断开 SSH 连接");
+    showMessage("success", browserPreview ? "浏览器预览：已断开 SSH 演示连接" : "已断开 SSH 连接");
   };
 
   useEffect(() => {
@@ -413,6 +490,11 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
           连接模式
         </div>
         <div className="panel-body">
+          {browserPreview && (
+            <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-300">
+              当前为浏览器预览：下面的连接按钮会注入演示数据，方便先看 UI 和页面联动。
+            </div>
+          )}
           <div className="flex gap-2">
             <button
               onClick={async () => {
@@ -485,7 +567,7 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
 
       <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-3 text-xs text-gray-500 dark:text-gray-400 flex items-start gap-2">
         <MonitorSmartphone className="w-4 h-4 mt-0.5" />
-        <div>当前版本保留手动 ADB 刷新、SSH 网址选择和基础日志，界面尽量简化，先满足点屏调试使用。</div>
+        <div>{browserPreview ? "浏览器预览会使用演示连接数据；切回 Tauri 环境后会恢复真实 ADB / SSH / 设备探测逻辑。" : "当前版本保留手动 ADB 刷新、SSH 网址选择和基础日志，界面尽量简化，先满足点屏调试使用。"}</div>
       </div>
     </div>
   );

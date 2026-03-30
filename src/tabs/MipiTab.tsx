@@ -39,6 +39,16 @@ import type {
   TimingConfig,
 } from "../features/mipi/types";
 
+const RECENT_MENU_CLOSE_DELAY_MS = 150;
+const GRAY_PATTERN_MAP: Record<number, number> = {
+  16: 31,
+  32: 30,
+  64: 29,
+  128: 28,
+  192: 27,
+  224: 27,
+};
+
 export default function MipiTab() {
   const { appendLog, debugMode } = useConnection();
   const [driverCode, setDriverCode] = useState<string[]>(DEFAULT_DRIVER_CODE);
@@ -80,23 +90,24 @@ export default function MipiTab() {
     setRecentConfigs(next);
   };
 
-  const scheduleRecentMenuClose = () => {
+  const clearRecentMenuCloseTimer = () => {
     if (recentConfigCloseTimerRef.current) {
       window.clearTimeout(recentConfigCloseTimerRef.current);
+      recentConfigCloseTimerRef.current = null;
     }
+  };
+
+  const scheduleRecentMenuClose = () => {
+    clearRecentMenuCloseTimer();
     recentConfigCloseTimerRef.current = window.setTimeout(() => {
       setShowRecentConfigs(false);
       recentConfigCloseTimerRef.current = null;
-    }, 150);
+    }, RECENT_MENU_CLOSE_DELAY_MS);
   };
 
   const cancelRecentMenuClose = () => {
-    if (recentConfigCloseTimerRef.current) {
-      window.clearTimeout(recentConfigCloseTimerRef.current);
-      recentConfigCloseTimerRef.current = null;
-    }
+    clearRecentMenuCloseTimer();
   };
-
 
   const handleLoadLcdConfig = async () => {
     try {
@@ -186,9 +197,7 @@ export default function MipiTab() {
 
   useEffect(() => {
     return () => {
-      if (recentConfigCloseTimerRef.current) {
-        window.clearTimeout(recentConfigCloseTimerRef.current);
-      }
+      clearRecentMenuCloseTimer();
     };
   }, []);
 
@@ -217,12 +226,13 @@ export default function MipiTab() {
   };
 
   const handleGray = async (value: number) => {
+    const pattern = GRAY_PATTERN_MAP[value] ?? 27;
     appendLog(`显示画面 -> 灰阶 ${value}`, "info");
+
     if (debugMode) {
-      appendLog(`-> adb shell python3 /vismm/fbshow/logicPictureShow.py ${value === 16 ? 31 : value === 32 ? 30 : value === 64 ? 29 : value === 128 ? 28 : 27}`, "debug");
+      appendLog(`-> adb shell python3 /vismm/fbshow/logicPictureShow.py ${pattern}`, "debug");
     }
-    const patternMap: Record<number, number> = { 16: 31, 32: 30, 64: 29, 128: 28, 192: 27, 224: 27 };
-    const pattern = patternMap[value] ?? 27;
+
     const result = await tauriInvoke<PatternResult>("run_logic_pattern", { request: { pattern } });
     if (result.success) {
       appendLog(`显示完成 -> 灰阶 ${value}`, "success");

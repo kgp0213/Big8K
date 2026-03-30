@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "description": "Install tools 部署清单",
+  "steps": [
+    {
+      "name": "upload_dist_packages",
+      "description": "上传 dist-packages 目录到设备",
+      "local_path": "resources/deploy/dist-packages",
+      "remote_path": "/vismm/dist-packages",
+      "action": "push_dir"
+    },
+    {
+      "name": "install_python_libs",
+      "description": "安装 Python whl 文件",
+      "local_path": "resources/deploy/python-libs",
+      "remote_path": "/vismm/python-libs",
+      "action": "pip_install_whl",
+      "whl_files": [
+        "Pillow-9.5.0-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "smbus2-0.5.0-py2.py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "install_cpio",
+      "description": "安装 cpio deb 包",
+      "local_file": "resources/deploy/dist-packages/cpio_2.13+dfsg-2ubuntu0.4_arm64.deb",
+      "remote_path": "/tmp/cpio/",
+      "action": "dpkg_install"
+    }
+  ],
+  "verify_commands": [
+    {
+      "description": "验证 Pillow 安装",
+      "command": "python3 -c \"from PIL import Image; print(Image.__version__)\"",
+      "expected_output_contains": "9.5.0"
+    },
+    {
+      "description": "验证 cpio 安装",
+      "command": "dpkg -l | grep cpio",
+      "expected_output_contains": "cpio"
+    }
+  ],
+  "_comment": {
+    "how_to_add_new_files": "将新 whl 文件放到 python-libs/ 目录，然后在 whl_files 数组中添加文件名",
+    "how_to_add_new_deb": "将新 deb 文件放到 dist-packages/ 目录，然后在 steps 中新增一个 action: dpkg_install 的步骤",
+    "how_to_add_new_dir": "在 resources/deploy/ 下创建新目录，然后在 steps 中新增一个 action: push_dir 的步骤"
+  }
+}

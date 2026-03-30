@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "description": "部署清单索引",
+  "manifests": [
+    {
+      "name": "Install tools",
+      "file": "install-tools.json",
+      "button": "Install tools",
+      "description": "部署 Python 库和系统工具",
+      "contents": ["Python whl 文件", "deb 包", "系统工具"]
+    },
+    {
+      "name": "Install App",
+      "file": "install-app.json",
+      "button": "Install App",
+      "description": "部署刷图应用脚本和工具",
+      "contents": ["Python 脚本", "Shell 脚本", "二进制工具"]
+    }
+  ],
+  "directories": {
+    "dist-packages": "系统工具和 deb 包",
+    "python-libs": "Python whl 文件",
+    "fb-operate": "刷图应用脚本和工具",
+    "fb-RunApp": "运行时应用"
+  },
+  "how_to_add_new_manifest": {
+    "step_1": "创建新的清单文件 resources/deploy/manifests/xxx.json",
+    "step_2": "在此索引文件的 manifests 数组中添加条目",
+    "step_3": "在前端代码中添加对应的按钮调用"
+  }
+}

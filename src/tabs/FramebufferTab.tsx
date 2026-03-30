@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Upload,
   Image,
-  Play,
   Monitor,
   Palette,
   Film,
@@ -10,6 +9,14 @@ import {
   FolderOpen,
   Search,
   Check,
+  Settings2,
+  Play,
+  FolderTree,
+  Trash2,
+  FileCode,
+  Video,
+  Pause,
+  Square,
 } from "lucide-react";
 import { useConnection } from "../App";
 import { tauriInvoke } from "../utils/tauri";
@@ -64,6 +71,27 @@ const patternOptions = [
 
 const patternLabels = Object.fromEntries(patternOptions.map((item) => [item.color, item.name])) as Record<string, string>;
 
+// 文件类型配置
+const FILE_TYPE_CONFIG = {
+  script: {
+    label: "脚本",
+    path: "/vismm/fbshow/",
+    extensions: [".py"],
+  },
+  image: {
+    label: "图片",
+    path: "/vismm/fbshow/bmp_online/",
+    extensions: [".bmp", ".jpg", ".jpeg", ".png"],
+  },
+  video: {
+    label: "视频",
+    path: "/vismm/fbshow/movie_online/",
+    extensions: [".mp4", ".avi", ".mov"],
+  },
+} as const;
+
+type FileType = keyof typeof FILE_TYPE_CONFIG;
+
 let imagePanelCache: {
   entries: LocalImageEntry[];
   imagePath: string;
@@ -93,6 +121,18 @@ export default function FramebufferTab() {
   const [viewMode, setViewMode] = useState<ImageViewMode>(imagePanelCache?.viewMode || "grid");
   const [uploadedImageMap, setUploadedImageMap] = useState<Record<string, string>>(imagePanelCache?.uploadedImageMap || {});
   const [disconnectedLogged, setDisconnectedLogged] = useState(false);
+
+  // DEMO 设置 - 文件工作区状态
+  const [fileType, setFileType] = useState<FileType>("script");
+  const [remotePath, setRemotePath] = useState<string>(FILE_TYPE_CONFIG.script.path);
+  const [selectedFileName, setSelectedFileName] = useState<string>("");
+  const [remoteFileList, setRemoteFileList] = useState<string[]>([]);
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [videoZoomMode, setVideoZoomMode] = useState(0);
+  const [showFramerate, setShowFramerate] = useState(false);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const [isScriptRunning, setIsScriptRunning] = useState(false);
 
   const isConnected = connection.connected && connection.type === "adb";
 
@@ -268,6 +308,280 @@ export default function FramebufferTab() {
     }
   };
 
+  // 文件类型切换时更新路径
+  const handleFileTypeChange = (type: FileType) => {
+    setFileType(type);
+    setRemotePath(FILE_TYPE_CONFIG[type].path);
+    setSelectedFileName("");
+    setRemoteFileList([]);
+  };
+
+  // 查看目录 - 获取远程文件列表
+  const handleListRemoteFiles = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
+    }
+
+    setIsLoadingFiles(true);
+    appendLog(`查看目录: ${remotePath}`, "info");
+
+    try {
+      const result = await tauriInvoke<{ success: boolean; files: string[]; error?: string }>("list_remote_files", {
+        request: { path: remotePath }
+      });
+
+      if (result.success && result.files) {
+        // 根据文件类型过滤
+        const extensions = FILE_TYPE_CONFIG[fileType].extensions;
+        const filteredFiles = result.files.filter(file => {
+          const ext = getFileExtension(file);
+          return extensions.some(e => ext === e.toLowerCase());
+        });
+        setRemoteFileList(filteredFiles);
+        appendLog(`找到 ${filteredFiles.length} 个${FILE_TYPE_CONFIG[fileType].label}文件`, "success");
+      } else {
+        appendLog(result.error || "获取文件列表失败", "error");
+        setRemoteFileList([]);
+      }
+    } catch (err) {
+      appendLog(`获取文件列表异常: ${String(err)}`, "error");
+      setRemoteFileList([]);
+    } finally {
+      setIsLoadingFiles(false);
+    }
+  };
+
+  // 上传文件
+  const handleUploadFile = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
+    }
+
+    // 触发文件选择对话框
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.accept = FILE_TYPE_CONFIG[fileType].extensions.join(",");
+
+    input.onchange = async (e) => {
+      const files = (e.target as HTMLInputElement).files;
+      if (!files || files.length === 0) return;
+
+      setIsUploading(true);
+      appendLog(`开始上传 ${files.length} 个文件到 ${remotePath}`, "info");
+
+      try {
+        for (const file of Array.from(files)) {
+          const arrayBuffer = await file.arrayBuffer();
+          const base64 = btoa(
+            new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+          );
+
+          const result = await tauriInvoke<{ success: boolean; error?: string }>("upload_file_base64", {
+            request: {
+              base64_data: base64,
+              remote_path: `${remotePath}${file.name}`,
+            }
+          });
+
+          if (result.success) {
+            appendLog(`上传成功: ${file.name}`, "success");
+          } else {
+            appendLog(`上传失败: ${file.name} - ${result.error}`, "error");
+          }
+        }
+
+        // 上传完成后刷新列表
+        await handleListRemoteFiles();
+      } catch (err) {
+        appendLog(`上传异常: ${String(err)}`, "error");
+      } finally {
+        setIsUploading(false);
+      }
+    };
+
+    input.click();
+  };
+
+  // 运行脚本
+  const handleRunScript = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
+    }
+    if (!selectedFileName) {
+      appendLog("请先从列表中选择一个脚本", "warning");
+      return;
+    }
+
+    appendLog(`运行脚本: ${selectedFileName}`, "info");
+    setIsScriptRunning(true);
+    try {
+      const result = await tauriInvoke<{ success: boolean; error?: string }>("run_remote_script", {
+        request: { script_path: `${remotePath}${selectedFileName}` }
+      });
+
+      if (result.success) {
+        appendLog(`脚本执行完成`, "success");
+      } else {
+        appendLog(result.error || "脚本执行失败", "error");
+      }
+    } catch (err) {
+      appendLog(`脚本执行异常: ${String(err)}`, "error");
+    } finally {
+      setIsScriptRunning(false);
+    }
+  };
+
+  // 停止脚本
+  const handleStopScript = async () => {
+    try {
+      const result = await tauriInvoke<{ success: boolean; error?: string }>("stop_remote_script");
+      if (result.success) {
+        appendLog("已停止脚本执行", "info");
+        setIsScriptRunning(false);
+      } else {
+        appendLog(result.error || "停止失败", "error");
+      }
+    } catch (err) {
+      appendLog(`停止异常: ${String(err)}`, "error");
+    }
+  };
+
+  // 设置开机运行脚本
+  const handleSetAutorun = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
+    }
+    if (!selectedFileName) {
+      appendLog("请先从列表中选择一个脚本", "warning");
+      return;
+    }
+
+    appendLog(`设置开机运行: ${selectedFileName}`, "info");
+    try {
+      const result = await tauriInvoke<{ success: boolean; error?: string }>("set_script_autorun", {
+        request: { script_name: selectedFileName }
+      });
+
+      if (result.success) {
+        appendLog(`开机运行设置成功，重启后生效`, "success");
+      } else {
+        appendLog(result.error || "设置开机运行失败", "error");
+      }
+    } catch (err) {
+      appendLog(`设置开机运行异常: ${String(err)}`, "error");
+    }
+  };
+
+  // 删除文件
+  const handleDeleteFile = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
+    }
+    if (!selectedFileName) {
+      appendLog("请先从列表中选择一个文件", "warning");
+      return;
+    }
+
+    appendLog(`删除文件: ${selectedFileName}`, "info");
+    try {
+      const result = await tauriInvoke<{ success: boolean; error?: string }>("delete_remote_file", {
+        request: { file_path: `${remotePath}${selectedFileName}` }
+      });
+
+      if (result.success) {
+        appendLog(`文件删除成功`, "success");
+        setSelectedFileName("");
+        await handleListRemoteFiles();
+      } else {
+        appendLog(result.error || "删除文件失败", "error");
+      }
+    } catch (err) {
+      appendLog(`删除文件异常: ${String(err)}`, "error");
+    }
+  };
+
+  // 视频播放
+  const handleVideoPlay = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
+    }
+    if (!selectedFileName) {
+      appendLog("请先从列表中选择一个视频文件", "warning");
+      return;
+    }
+
+    appendLog(`播放视频: ${selectedFileName}`, "info");
+    setIsVideoPlaying(true);
+    try {
+      const result = await tauriInvoke<{ success: boolean; error?: string }>("play_video", {
+        request: {
+          video_path: `${remotePath}${selectedFileName}`,
+          zoom_mode: videoZoomMode,
+          show_framerate: showFramerate ? 1 : 0
+        }
+      });
+
+      if (result.success) {
+        appendLog(`视频播放已启动`, "success");
+      } else {
+        appendLog(result.error || "视频播放失败", "error");
+        setIsVideoPlaying(false);
+      }
+    } catch (err) {
+      appendLog(`视频播放异常: ${String(err)}`, "error");
+      setIsVideoPlaying(false);
+    }
+  };
+
+  // 视频暂停
+  const handleVideoPause = async () => {
+    try {
+      await tauriInvoke("send_video_control", { request: { action: "pause" } });
+      appendLog("视频已暂停", "info");
+    } catch (err) {
+      appendLog(`暂停失败: ${String(err)}`, "error");
+    }
+  };
+
+  // 视频停止
+  const handleVideoStop = async () => {
+    try {
+      await tauriInvoke("send_video_control", { request: { action: "stop" } });
+      appendLog("视频已停止", "info");
+      setIsVideoPlaying(false);
+    } catch (err) {
+      appendLog(`停止失败: ${String(err)}`, "error");
+    }
+  };
+
+  // 循环播放图片
+  const handleLoopImages = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
+    }
+    appendLog("循环播放图片脚本生成中...", "info");
+    try {
+      const result = await tauriInvoke<{ success: boolean; error?: string }>("setup_loop_images", {
+        request: { image_path: FILE_TYPE_CONFIG.image.path }
+      });
+      if (result.success) {
+        appendLog("循环播放图片已设置，重启后生效", "success");
+      } else {
+        appendLog(result.error || "设置循环播放失败", "error");
+      }
+    } catch (err) {
+      appendLog(`设置循环播放异常: ${String(err)}`, "error");
+    }
+  };
+
   const isResolutionMatched = (item: LocalImageEntry) => {
     if (!currentResolution || !item.width || !item.height) return false;
     return item.width === currentResolution.width && item.height === currentResolution.height;
@@ -364,7 +678,7 @@ export default function FramebufferTab() {
           <Palette className="w-4 h-4" /> 测试图案
         </button>
         <button onClick={() => setActiveSubTab("video")} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeSubTab === "video" ? "bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300" : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"}`}>
-          <Film className="w-4 h-4" /> 视频播放
+          <Film className="w-4 h-4" /> DEMO 设置
         </button>
       </div>
 
@@ -511,7 +825,7 @@ export default function FramebufferTab() {
                           </div>
                           <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50/60 dark:bg-gray-800/40">
                             <div className="text-[11px] text-gray-500 dark:text-gray-400">上屏状态</div>
-                            <div className="mt-1"><span className={`text-[11px] px-2 py-1 rounded-full ${currentImage ? (currentImageMatched ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300") : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>{currentImage ? (currentImageMatched ? "适配分辨率" : "未适配" ) : "待选择图片"}</span></div>
+                            <div className="mt-1"><span className={`text-[11px] px-2 py-1 rounded-full ${currentImage ? (currentImageMatched ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300") : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>{currentImage ? (currentImageMatched ? "适配分辨率" : "未适配") : "待选择图片"}</span></div>
                           </div>
                         </div>
                       </div>
@@ -566,28 +880,237 @@ export default function FramebufferTab() {
       )}
 
       {activeSubTab === "video" && (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4">
+          {/* DEMO 功能区 */}
           <div className="panel">
-            <div className="panel-header">视频列表</div>
-            <div className="panel-body">
-              <div className="space-y-2">
-                {["demo_video.mp4", "test_video.avi"].map((video, idx) => (
-                  <div key={idx} className="flex items-center gap-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer">
-                    <Film className="w-8 h-8 text-primary-600" />
-                    <div className="flex-1">
-                      <div className="font-medium text-sm">{video}</div>
-                      <div className="text-xs text-gray-500">1920×1080, 30fps</div>
+            <div className="panel-header flex items-center gap-2">
+              <Film className="w-4 h-4" />
+              DEMO
+            </div>
+            <div className="panel-body space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => void handleLoopImages()}
+                  disabled={!isConnected}
+                  className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-4 text-left transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30">
+                      <Image className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     </div>
-                    <Play className="w-5 h-5 text-gray-400" />
+                    <div>
+                      <div className="text-sm font-semibold">循环播放图片</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">设置开机循环播放图片</div>
+                    </div>
                   </div>
-                ))}
+                </button>
+                <button
+                  onClick={() => void handleVideoPlay()}
+                  disabled={!isConnected || !selectedFileName || isVideoPlaying}
+                  className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-4 text-left transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                      <Video className="w-5 h-5 text-green-600 dark:text-green-400" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-semibold">视频播放</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">播放选中的视频文件</div>
+                    </div>
+                  </div>
+                </button>
               </div>
+
+              {/* 视频控制 */}
+              {fileType === "video" && (
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+                  <div className="text-sm font-semibold">视频控制</div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">缩放模式:</span>
+                      <select
+                        value={videoZoomMode}
+                        onChange={(e) => setVideoZoomMode(Number(e.target.value))}
+                        className="input text-xs py-1 px-2"
+                      >
+                        <option value={0}>原始大小</option>
+                        <option value={1}>适应屏幕</option>
+                        <option value={2}>填充屏幕</option>
+                      </select>
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={showFramerate}
+                        onChange={(e) => setShowFramerate(e.target.checked)}
+                      />
+                      显示帧率
+                    </label>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => void handleVideoPlay()}
+                      disabled={isVideoPlaying || !selectedFileName}
+                      className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-60"
+                    >
+                      <Play className="w-3.5 h-3.5" /> 播放
+                    </button>
+                    <button
+                      onClick={() => void handleVideoPause()}
+                      disabled={!isVideoPlaying}
+                      className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-60"
+                    >
+                      <Pause className="w-3.5 h-3.5" /> 暂停
+                    </button>
+                    <button
+                      onClick={() => void handleVideoStop()}
+                      disabled={!isVideoPlaying}
+                      className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-60"
+                    >
+                      <Square className="w-3.5 h-3.5" /> 停止
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
+
+          {/* 文件工作区 */}
           <div className="panel">
-            <div className="panel-header">视频控制</div>
-            <div className="panel-body space-y-3 text-sm text-gray-600 dark:text-gray-300">
-              <p>视频播放相关功能待后续接入。</p>
+            <div className="panel-header flex items-center gap-2">
+              <FolderOpen className="w-4 h-4" />
+              文件 / 脚本工作区
+            </div>
+            <div className="panel-body space-y-4">
+              {/* 文件类型切换 */}
+              <div className="flex gap-2">
+                {(["script", "image", "video"] as FileType[]).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => handleFileTypeChange(type)}
+                    className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                      fileType === type
+                        ? "border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300"
+                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 hover:border-gray-300 dark:hover:border-gray-600"
+                    }`}
+                  >
+                    {FILE_TYPE_CONFIG[type].label}
+                  </button>
+                ))}
+              </div>
+
+              {/* 路径和选中文件 */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">远程路径</label>
+                  <input
+                    value={remotePath}
+                    onChange={(e) => setRemotePath(e.target.value)}
+                    className="input text-sm"
+                    placeholder="/vismm/fbshow/"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">选中文件</label>
+                  <input
+                    value={selectedFileName}
+                    onChange={(e) => setSelectedFileName(e.target.value)}
+                    className="input text-sm"
+                    placeholder="从下方列表选择或手动输入"
+                    readOnly
+                  />
+                </div>
+              </div>
+
+              {/* 文件列表 */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs text-gray-500 dark:text-gray-400">
+                    文件列表 ({remoteFileList.length} 个{FILE_TYPE_CONFIG[fileType].label}文件)
+                  </label>
+                  <button
+                    onClick={() => void handleListRemoteFiles()}
+                    disabled={!isConnected || isLoadingFiles}
+                    className="btn-secondary text-xs px-3 py-1 flex items-center gap-1.5"
+                  >
+                    {isLoadingFiles ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <FolderTree className="w-3.5 h-3.5" />
+                    )}
+                    查看目录
+                  </button>
+                </div>
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 max-h-[240px] overflow-auto">
+                  {remoteFileList.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-sm text-gray-400">
+                      点击"查看目录"加载文件列表
+                    </div>
+                  ) : (
+                    <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+                      {remoteFileList.map((file, index) => (
+                        <li key={`${file}-${index}`}>
+                          <button
+                            onClick={() => setSelectedFileName(file)}
+                            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors flex items-center gap-2 ${
+                              selectedFileName === file ? "bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300" : ""
+                            }`}
+                          >
+                            {fileType === "script" && <FileCode className="w-4 h-4 text-gray-400" />}
+                            {fileType === "image" && <Image className="w-4 h-4 text-gray-400" />}
+                            {fileType === "video" && <Video className="w-4 h-4 text-gray-400" />}
+                            <span className="truncate">{file}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
+              {/* 操作按钮 */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => void handleUploadFile()}
+                  disabled={!isConnected || isUploading}
+                  className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-2.5 text-sm font-medium transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  上传文件
+                </button>
+                <button
+                  onClick={() => void handleRunScript()}
+                  disabled={!isConnected || !selectedFileName || fileType !== "script" || isScriptRunning}
+                  className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-2.5 text-sm font-medium transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  <Play className="w-4 h-4" />
+                  运行脚本
+                </button>
+                <button
+                  onClick={() => void handleStopScript()}
+                  disabled={!isScriptRunning}
+                  className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-amber-100 dark:hover:bg-amber-900/30 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  <Square className="w-4 h-4" />
+                  停止脚本
+                </button>
+                <button
+                  onClick={() => void handleSetAutorun()}
+                  disabled={!isConnected || !selectedFileName || fileType !== "script"}
+                  className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-2.5 text-sm font-medium transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  <Settings2 className="w-4 h-4" />
+                  设置开机运行
+                </button>
+                <button
+                  onClick={() => void handleDeleteFile()}
+                  disabled={!isConnected || !selectedFileName}
+                  className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-red-100 dark:hover:bg-red-900/30 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  删除文件
+                </button>
+              </div>
             </div>
           </div>
         </div>

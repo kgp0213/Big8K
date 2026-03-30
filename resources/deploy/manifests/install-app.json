@@ -1,0 +1,115 @@
+{
+  "version": "1.0.0",
+  "description": "Install App 部署清单 - 部署刷图应用和脚本",
+  "steps": [
+    {
+      "name": "upload_fb_operate",
+      "description": "上传刷图应用脚本和工具",
+      "local_path": "resources/deploy/fb-operate",
+      "remote_path": "/vismm/fbshow",
+      "action": "push_dir",
+      "set_executable": true
+    }
+  ],
+  "files": {
+    "description": "fb_operate 目录包含的文件",
+    "python_scripts": [
+      {
+        "name": "adaptive_screen_streamer.py",
+        "size_kb": 16,
+        "description": "自适应屏幕流传输"
+      },
+      {
+        "name": "adaptive_stream_receiver.py",
+        "size_kb": 12,
+        "description": "自适应流接收器"
+      },
+      {
+        "name": "autorunUSB.py",
+        "size_kb": 18,
+        "description": "USB 自动运行脚本"
+      },
+      {
+        "name": "chenfeng_movie.py",
+        "size_kb": 4,
+        "description": "视频播放脚本"
+      },
+      {
+        "name": "framebuffer_screenshot.py",
+        "size_kb": 2,
+        "description": "帧缓冲截图"
+      },
+      {
+        "name": "logicPictureShow.py",
+        "size_kb": 26,
+        "description": "逻辑图显示"
+      },
+      {
+        "name": "Mouse_crossLine.py",
+        "size_kb": 10,
+        "description": "鼠标十字线"
+      },
+      {
+        "name": "videoPlay.py",
+        "size_kb": 9,
+        "description": "视频播放"
+      }
+    ],
+    "shell_scripts": [
+      {
+        "name": "disableService.sh",
+        "size_kb": 3,
+        "description": "禁用服务脚本"
+      },
+      {
+        "name": "repack_initrd.sh",
+        "size_kb": 4,
+        "description": "重新打包 initrd"
+      }
+    ],
+    "binaries": [
+      {
+        "name": "fbShowBmp",
+        "size_kb": 14,
+        "description": "显示 BMP 图片"
+      },
+      {
+        "name": "fbShowMovie",
+        "size_kb": 9,
+        "description": "显示视频"
+      },
+      {
+        "name": "fbShowPattern",
+        "size_kb": 14,
+        "description": "显示测试图案"
+      },
+      {
+        "name": "vismpwr",
+        "size_kb": 14,
+        "description": "电源控制工具"
+      },
+      {
+        "name": "xdotool",
+        "size_kb": 77,
+        "description": "X11 自动化工具"
+      }
+    ]
+  },
+  "verify_commands": [
+    {
+      "description": "验证 fbshow 目录存在",
+      "command": "ls -la /vismm/fbshow",
+      "expected_output_contains": "fbShowBmp"
+    },
+    {
+      "description": "验证 vismpwr 可执行",
+      "command": "ls -l /vismm/fbshow/vismpwr",
+      "expected_output_contains": "x"
+    }
+  ],
+  "_comment": {
+    "how_to_add_new_scripts": "将新的 .py 脚本放到 resources/deploy/fb-operate/ 目录，会自动上传",
+    "how_to_add_new_binaries": "将新的二进制文件放到 resources/deploy/fb-operate/ 目录，确保是 arm64 架构",
+    "remote_location": "文件会被推送到设备的 /vismm/fbshow/ 目录"
+  }
+}

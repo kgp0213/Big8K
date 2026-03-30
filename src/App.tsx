@@ -9,6 +9,7 @@ import PowerRailsTab from "./tabs/PowerRailsTab";
 import NetworkTab from "./tabs/NetworkTab";
 import DebugTab from "./tabs/DebugTab";
 import { tabs } from "./features/app/tabs";
+import { isTauri } from "./utils/tauri";
 import type { ConnectionContextType, ConnectionStatus, LogEntry, LogLevel, TabType } from "./features/app/types";
 
 export const ConnectionContext = createContext<ConnectionContextType>({
@@ -26,8 +27,9 @@ export const useConnection = () => useContext(ConnectionContext);
 function App() {
   const DESIGN_WIDTH = 1500;
   const DESIGN_HEIGHT = 900;
+  const browserPreview = !isTauri();
 
-  const [activeTab, setActiveTab] = useState<TabType>("mipi");
+  const [activeTab, setActiveTab] = useState<TabType>(browserPreview ? "home" : "mipi");
   const [darkMode, setDarkMode] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
@@ -62,6 +64,13 @@ function App() {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    if (!browserPreview) return;
+
+    appendLog("当前为浏览器预览模式：已启用 UI 演示与安全降级。", "info");
+    appendLog("ADB / SSH / Tauri 指令不会真正下发到设备，可先查看界面布局与交互。", "warning");
+  }, [browserPreview]);
 
   const scale = useMemo(() => {
     const widthScale = viewportWidth / DESIGN_WIDTH;
@@ -115,6 +124,11 @@ function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {browserPreview && (
+                    <div className="hidden md:flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-300">
+                      Browser Preview
+                    </div>
+                  )}
                   <button onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                     {darkMode ? <Sun className="w-5 h-5 text-gray-600 dark:text-gray-300" /> : <Moon className="w-5 h-5 text-gray-600 dark:text-gray-300" />}
                   </button>

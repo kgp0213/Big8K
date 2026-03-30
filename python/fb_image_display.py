@@ -7,13 +7,27 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-WIDTH = 3036
-HEIGHT = 1952
 FB_PATH = "/dev/fb0"
 FONT_PATHS = [
     "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ]
+
+
+def get_framebuffer_size():
+    """从 fb0 获取实际分辨率"""
+    try:
+        with open("/sys/class/graphics/fb0/virtual_size", "r") as f:
+            content = f.read().strip()
+            if "," in content:
+                w, h = content.split(",")
+                return int(w), int(h)
+    except Exception:
+        pass
+    return 3036, 1952
+
+
+WIDTH, HEIGHT = get_framebuffer_size()
 
 
 def load_font(size: int):
