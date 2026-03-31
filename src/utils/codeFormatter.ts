@@ -339,19 +339,22 @@ export const convertCodeToMipiCommands = (text: string): CommandSendConvertResul
       continue;
     }
 
-    if (/^(05|39|29|0A)(\s+[0-9A-F]{2})+$/.test(normalized)) {
+    if (/^(05|39|29|0A)(\s+[0-9A-F]{2})+$/.test(normalized) && parts.length >= 4) {
       const declaredCount = parseInt(parts[2], 16);
       const actualCount = parts.length - 3;
-      if (parts.length < 4) {
-        errors.push(`第${lineNumber}行 字段数量不足，至少需要 4 个字段`);
+      const dt = parts[0];
+      const looksLikeFormatted =
+        declaredCount === actualCount &&
+        ((dt === "05" && declaredCount === 1) ||
+          (dt === "29" && declaredCount >= 2) ||
+          (dt === "39" && declaredCount >= 2) ||
+          (dt === "0A" && declaredCount >= 1));
+
+      if (looksLikeFormatted) {
+        commands.push(parts.join(" "));
         continue;
       }
-      if (declaredCount !== actualCount) {
-        errors.push(`第${lineNumber}行 长度字段 ${parts[2]} 与后续数据数量不一致，声明 ${declaredCount}，实际 ${actualCount}`);
-        continue;
-      }
-      commands.push(parts.join(" "));
-      continue;
+      // 否则按右侧原始字节流处理，不把它误判成左侧格式化代码。
     }
 
     if (keyword === "REGW05" || keyword === "REGW29" || keyword === "REGW39" || keyword === "REGW0A") {

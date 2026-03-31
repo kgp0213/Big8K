@@ -6,7 +6,7 @@ use ssh2::Session;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 #[cfg(feature = "ssh")]
 use std::time::Duration;
@@ -76,6 +76,9 @@ pub struct DeviceProbeResult {
     pub fb0_available: bool,
     pub vismpwr_available: bool,
     pub python3_available: bool,
+    pub cpu_usage: Option<String>,
+    pub memory_usage: Option<String>,
+    pub temperature_c: Option<String>,
     pub error: Option<String>,
 }
 
@@ -139,6 +142,18 @@ struct UploadFileBase64Request {
 #[derive(Debug, Serialize, Deserialize)]
 struct RunRemoteScriptRequest {
     script_path: String,
+    #[serde(default)]
+    script_args: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SetScriptAutorunRequest {
+    script_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DeleteRemoteFileRequest {
+    file_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -156,6 +171,14 @@ struct PlayVideoRequest {
 #[derive(Debug, Serialize, Deserialize)]
 struct VideoControlRequest {
     action: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct VideoPlaybackStatus {
+    success: bool,
+    is_running: bool,
+    output: String,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -319,6 +342,22 @@ fn run_adb(args: &[&str]) -> Result<std::process::Output, String> {
     command
         .output()
         .map_err(|e| format!("执行 adb 失败: {}。请确认 adb 已安装并加入 PATH", e))
+}
+
+fn run_adb_nowait(args: &[&str]) -> Result<(), String> {
+    let mut command = Command::new("adb");
+    command.args(args);
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("执行 adb 后台命令失败: {}。请确认 adb 已安装并加入 PATH", e))
 }
 
 fn parse_adb_devices(stdout: &str) -> Vec<AdbDevice> {
@@ -889,7 +928,7 @@ fn ssh_exec(_host: String, _port: u16, _username: String, _password: String, _co
 
 #[tauri::command]
 fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeResult {
-    let command = r"MODEL=$(getprop ro.product.model 2>/dev/null); VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null); BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null); if dmesg 2>/dev/null | grep -q 'Initialized in CMD mode'; then MIPI_MODE=CMD; else MIPI_MODE=VIDEO; fi; LANES=$( (dmesg 2>/dev/null | grep -ioE 'dsi,lanes: *[0-9]+' | tail -n 1 | grep -ioE '[0-9]+') || (dmesg 2>/dev/null | grep -ioE 'lanes=[0-9]+' | tail -n 1 | grep -ioE '[0-9]+') ); [ -e /dev/fb0 ] && echo FB0=1 || echo FB0=0; command -v vismpwr >/dev/null 2>&1 && echo VISMPWR=1 || echo VISMPWR=0; command -v python3 >/dev/null 2>&1 && echo PYTHON3=1 || echo PYTHON3=0; echo MODEL=$MODEL; echo VSIZE=$VSIZE; echo BPP=$BPP; echo MIPI_MODE=$MIPI_MODE; echo LANES=$LANES";
+    let command = r#"MODEL=$(getprop ro.product.model 2>/dev/null); VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null); BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null); if dmesg 2>/dev/null | grep -q 'Initialized in CMD mode'; then MIPI_MODE=CMD; else MIPI_MODE=VIDEO; fi; LANES=$( (dmesg 2>/dev/null | grep -ioE 'dsi,lanes: *[0-9]+' | tail -n 1 | grep -ioE '[0-9]+') || (dmesg 2>/dev/null | grep -ioE 'lanes=[0-9]+' | tail -n 1 | grep -ioE '[0-9]+') ); [ -e /dev/fb0 ] && echo FB0=1 || echo FB0=0; command -v vismpwr >/dev/null 2>&1 && echo VISMPWR=1 || echo VISMPWR=0; command -v python3 >/dev/null 2>&1 && echo PYTHON3=1 || echo PYTHON3=0; CPU=$(awk '/cpu / {usage=($2+$4)*100/($2+$4+$5)} END {printf("%.1f%%", usage)}' /proc/stat 2>/dev/null); MEM=$(awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END {if (t>0) printf("%.1f%% (%dMB / %dMB)", (t-a)*100/t, (t-a)/1024, t/1024)}' /proc/meminfo 2>/dev/null); TEMP=$(awk '{printf("%.1f", $1/1000)}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null); echo MODEL=$MODEL; echo VSIZE=$VSIZE; echo BPP=$BPP; echo MIPI_MODE=$MIPI_MODE; echo LANES=$LANES; echo CPU=$CPU; echo MEM=$MEM; echo TEMP=$TEMP"#;
 
     match adb_shell_internal(&state, command) {
         Ok(result) if result.success => {
@@ -901,6 +940,9 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
             let mut fb0_available = false;
             let mut vismpwr_available = false;
             let mut python3_available = false;
+            let mut cpu_usage = None;
+            let mut memory_usage = None;
+            let mut temperature_c = None;
 
             for line in result.output.lines() {
                 if let Some(value) = line.strip_prefix("MODEL=") {
@@ -931,6 +973,18 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
                     vismpwr_available = true;
                 } else if line.trim() == "PYTHON3=1" {
                     python3_available = true;
+                } else if let Some(value) = line.strip_prefix("CPU=") {
+                    if !value.trim().is_empty() {
+                        cpu_usage = Some(value.trim().to_string());
+                    }
+                } else if let Some(value) = line.strip_prefix("MEM=") {
+                    if !value.trim().is_empty() {
+                        memory_usage = Some(value.trim().to_string());
+                    }
+                } else if let Some(value) = line.strip_prefix("TEMP=") {
+                    if !value.trim().is_empty() {
+                        temperature_c = Some(format!("{}°C", value.trim()));
+                    }
                 }
             }
 
@@ -944,6 +998,9 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
                 fb0_available,
                 vismpwr_available,
                 python3_available,
+                cpu_usage,
+                memory_usage,
+                temperature_c,
                 error: None,
             }
         }
@@ -957,6 +1014,9 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
             fb0_available: false,
             vismpwr_available: false,
             python3_available: false,
+            cpu_usage: None,
+            memory_usage: None,
+            temperature_c: None,
             error: result.error.or(Some("ADB 设备探测失败".to_string())),
         },
         Err(error) => DeviceProbeResult {
@@ -969,6 +1029,9 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
             fb0_available: false,
             vismpwr_available: false,
             python3_available: false,
+            cpu_usage: None,
+            memory_usage: None,
+            temperature_c: None,
             error: Some(error),
         },
     }
@@ -2329,10 +2392,13 @@ fn candidate_roots() -> Vec<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             roots.push(exe_dir.to_path_buf());
-            if let Some(parent) = exe_dir.parent() {
-                roots.push(parent.to_path_buf());
-                if let Some(grand_parent) = parent.parent() {
-                    roots.push(grand_parent.to_path_buf());
+            let mut current = exe_dir.to_path_buf();
+            for _ in 0..4 {
+                if let Some(parent) = current.parent() {
+                    roots.push(parent.to_path_buf());
+                    current = parent.to_path_buf();
+                } else {
+                    break;
                 }
             }
         }
@@ -2340,8 +2406,14 @@ fn candidate_roots() -> Vec<PathBuf> {
 
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd.clone());
-        if let Some(parent) = cwd.parent() {
-            roots.push(parent.to_path_buf());
+        let mut current = cwd;
+        for _ in 0..4 {
+            if let Some(parent) = current.parent() {
+                roots.push(parent.to_path_buf());
+                current = parent.to_path_buf();
+            } else {
+                break;
+            }
         }
     }
 
@@ -2367,6 +2439,52 @@ fn resolve_deploy_resource_dir(relative: &str, legacy_relative: Option<&str>) ->
 fn adb_push_path(state: &tauri::State<Mutex<ConnectionState>>, local: &Path, remote: &str) -> Result<AdbActionResult, String> {
     let local_path = local.to_string_lossy().to_string();
     adb_push_internal(state, &local_path, remote)
+}
+
+#[tauri::command]
+fn get_local_network_info() -> GenericResult {
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("cmd")
+            .args(["/C", "chcp 65001>nul & ipconfig"])
+            .output();
+        match output {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout).to_string();
+                if result.status.success() {
+                    GenericResult { success: true, output: stdout, error: None }
+                } else {
+                    GenericResult {
+                        success: false,
+                        output: stdout,
+                        error: Some("读取本机网络信息失败".to_string()),
+                    }
+                }
+            }
+            Err(error) => GenericResult { success: false, output: String::new(), error: Some(format!("读取本机网络信息异常: {}", error)) },
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = Command::new("sh").args(["-lc", "ip addr || ifconfig"]).output();
+        match output {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout).to_string();
+                if result.status.success() {
+                    GenericResult { success: true, output: stdout, error: None }
+                } else {
+                    let stderr = String::from_utf8_lossy(&result.stderr).to_string();
+                    GenericResult {
+                        success: false,
+                        output: stdout,
+                        error: Some(if stderr.trim().is_empty() { "读取本机网络信息失败".to_string() } else { stderr }),
+                    }
+                }
+            }
+            Err(error) => GenericResult { success: false, output: String::new(), error: Some(format!("读取本机网络信息异常: {}", error)) },
+        }
+    }
 }
 
 fn ensure_remote_dirs(state: &tauri::State<Mutex<ConnectionState>>, dirs: &[&str]) -> Result<(), String> {
@@ -3110,26 +3228,71 @@ fn run_remote_script(request: RunRemoteScriptRequest, state: tauri::State<Mutex<
         }
     };
 
-    // 执行 python3 脚本
-    let command = vec!["-s", &device_id, "shell", "python3", &request.script_path];
-    match run_adb(&command) {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            if output.status.success() {
-                GenericResult {
-                    success: true,
-                    output: stdout,
-                    error: None,
-                }
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                GenericResult {
-                    success: false,
-                    output: stdout,
-                    error: Some(if stderr.is_empty() { "脚本执行失败".to_string() } else { stderr }),
+    let mut command = format!("python3 {}", shell_quote(&request.script_path));
+    if let Some(args) = request.script_args.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty()) {
+        command.push(' ');
+        command.push_str(args);
+    }
+
+    match run_adb_nowait(&["-s", &device_id, "shell", &command]) {
+        Ok(()) => GenericResult {
+            success: true,
+            output: format!("脚本已后台启动: {}", request.script_path),
+            error: None,
+        },
+        Err(error) => GenericResult {
+            success: false,
+            output: String::new(),
+            error: Some(error),
+        },
+    }
+}
+
+#[tauri::command]
+fn set_script_autorun(request: SetScriptAutorunRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
+    let script_path = request.script_path.trim();
+    if script_path.is_empty() {
+        return GenericResult { success: false, output: String::new(), error: Some("脚本路径不能为空".to_string()) };
+    }
+
+    let mut logs = Vec::new();
+    for target in ["/vismm/fbshow/autorun.py", "/vismm/autorun.py"] {
+        let command = format!("cp {} {} && chmod 444 {}", shell_quote(script_path), target, target);
+        match run_shell_required(&state, &command) {
+            Ok(output) => {
+                logs.push(format!("已设置 {} <- {}", target, script_path));
+                if !output.trim().is_empty() {
+                    logs.push(output.trim().to_string());
                 }
             }
+            Err(error) => {
+                return GenericResult { success: false, output: logs.join("\n"), error: Some(error) };
+            }
         }
+    }
+
+    GenericResult { success: true, output: logs.join("\n"), error: None }
+}
+
+#[tauri::command]
+fn delete_remote_file(request: DeleteRemoteFileRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
+    let file_path = request.file_path.trim();
+    if file_path.is_empty() {
+        return GenericResult { success: false, output: String::new(), error: Some("文件路径不能为空".to_string()) };
+    }
+
+    let command = format!("rm -f {}", shell_quote(file_path));
+    match adb_shell_internal(&state, &command) {
+        Ok(result) if result.success => GenericResult {
+            success: true,
+            output: if result.output.trim().is_empty() { format!("已删除文件: {}", file_path) } else { result.output },
+            error: None,
+        },
+        Ok(result) => GenericResult {
+            success: false,
+            output: result.output,
+            error: result.error.or(Some("删除文件失败".to_string())),
+        },
         Err(error) => GenericResult {
             success: false,
             output: String::new(),
@@ -3198,37 +3361,104 @@ fn setup_loop_images(_request: SetupLoopImagesRequest, state: tauri::State<Mutex
 }
 
 #[tauri::command]
-fn play_video(_request: PlayVideoRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
-    let bundle_dir = match resolve_deploy_resource_dir("resources/deploy/fb-RunApp/default_movie", Some("fb_RunApp/default_movie")) {
-        Ok(path) => path,
+fn play_video(request: PlayVideoRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
+    let input_path = request.video_path.trim();
+    if input_path.is_empty() {
+        return GenericResult { success: false, output: String::new(), error: Some("视频路径不能为空".to_string()) };
+    }
+
+    let device_id = match resolve_device_id(&state) {
+        Ok(id) => id,
         Err(error) => {
             return GenericResult { success: false, output: String::new(), error: Some(error) };
         }
     };
 
-    let mut logs = Vec::new();
-    match deploy_autorun_bundle(&state, &bundle_dir, &mut logs) {
-        Ok(_) => {
-            logs.push("开机自动播放视频脚本添加完成!".to_string());
-            GenericResult { success: true, output: logs.join("\n"), error: None }
+    let file_name = std::path::Path::new(input_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "视频文件名无效".to_string());
+
+    let file_name = match file_name {
+        Ok(name) => name,
+        Err(error) => {
+            return GenericResult { success: false, output: String::new(), error: Some(error) };
         }
-        Err(error) => GenericResult { success: false, output: logs.join("\n"), error: Some(error) },
+    };
+
+    let remote_video_path = format!("/vismm/fbshow/movie_online/{}", file_name);
+    let zoom_mode = request.zoom_mode.to_string();
+    let show_framerate = request.show_framerate.to_string();
+
+    match run_adb_nowait(&[
+        "-s",
+        &device_id,
+        "shell",
+        "/usr/bin/python3",
+        "/vismm/fbshow/videoPlay.py",
+        &remote_video_path,
+        &zoom_mode,
+        &show_framerate,
+    ]) {
+        Ok(()) => GenericResult {
+            success: true,
+            output: format!("已后台启动视频播放: {} (zoom={}, framerate={})", remote_video_path, request.zoom_mode, request.show_framerate),
+            error: None,
+        },
+        Err(error) => GenericResult {
+            success: false,
+            output: String::new(),
+            error: Some(error),
+        },
+    }
+}
+
+#[tauri::command]
+fn get_video_playback_status(state: tauri::State<Mutex<ConnectionState>>) -> VideoPlaybackStatus {
+    match adb_shell_internal(&state, r#"if [ -f /dev/shm/is_running ]; then echo running; else echo stopped; fi"#) {
+        Ok(result) if result.success => {
+            let is_running = result.output.lines().any(|line| line.trim() == "running");
+            VideoPlaybackStatus {
+                success: true,
+                is_running,
+                output: result.output,
+                error: None,
+            }
+        }
+        Ok(result) => VideoPlaybackStatus {
+            success: false,
+            is_running: false,
+            output: result.output,
+            error: result.error.or(Some("获取视频播放状态失败".to_string())),
+        },
+        Err(error) => VideoPlaybackStatus {
+            success: false,
+            is_running: false,
+            output: String::new(),
+            error: Some(error),
+        },
     }
 }
 
 #[tauri::command]
 fn send_video_control(request: VideoControlRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
     let command = match request.action.as_str() {
-        "pause" => "pkill -STOP -f 'python3 /vismm/autorun.py|python3 /vismm/fbshow/autorun.py|chenfeng_movie.py'",
-        "resume" => "pkill -CONT -f 'python3 /vismm/autorun.py|python3 /vismm/fbshow/autorun.py|chenfeng_movie.py'",
-        "stop" => "killall python3",
+        "pause" => r#"echo > /dev/shm/pause_signal"#,
+        "resume" => r#"echo > /dev/shm/pause_signal"#,
+        "stop" => r#"echo > /dev/shm/stop_signal"#,
         other => {
             return GenericResult { success: false, output: String::new(), error: Some(format!("不支持的视频控制动作: {}", other)) };
         }
     };
 
     match adb_shell_internal(&state, command) {
-        Ok(result) if result.success => GenericResult { success: true, output: result.output, error: None },
+        Ok(result) if result.success => GenericResult {
+            success: true,
+            output: if result.output.trim().is_empty() { format!("视频控制已发送: {}", request.action) } else { result.output },
+            error: None,
+        },
         Ok(result) => GenericResult { success: false, output: result.output, error: result.error.or(Some("视频控制失败".to_string())) },
         Err(error) => GenericResult { success: false, output: String::new(), error: Some(error) },
     }
@@ -3248,6 +3478,7 @@ pub fn run() {
             adb_push,
             adb_pull,
             adb_probe_device,
+            get_local_network_info,
             set_static_ip,
             ssh_connect,
             ssh_exec,
@@ -3269,6 +3500,7 @@ pub fn run() {
             display_image,
             setup_loop_images,
             play_video,
+            get_video_playback_status,
             send_video_control,
             mipi_send_command,
             mipi_send_commands,
@@ -3295,7 +3527,9 @@ pub fn run() {
             list_remote_files,
             upload_file_base64,
             run_remote_script,
-            stop_remote_script
+            stop_remote_script,
+            set_script_autorun,
+            delete_remote_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

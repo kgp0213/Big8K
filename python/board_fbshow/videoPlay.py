@@ -84,20 +84,20 @@ debug_logs = []
 
 def resize_frame(frame):
     if is_resize == 0:
-        if video_width < screen_width and video_height < screen_height:
-            # 居中显示，四周填黑
-            frame_padded = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
-            y_offset = (screen_height - video_height) // 2
-            x_offset = (screen_width - video_width) // 2
-            frame_padded[y_offset:y_offset+video_height, x_offset:x_offset+video_width] = frame
-            frame = frame_padded
-        elif video_width > screen_width or video_height > screen_height:
-            # 从视频中间裁剪出屏幕分辨率大小的区域
-            x_center = video_width // 2
-            y_center = video_height // 2
-            x_start = x_center - screen_width // 2
-            y_start = y_center - screen_height // 2
-            frame = frame[y_start:y_start+screen_height, x_start:x_start+screen_width]
+        # 原始大小模式：超出屏幕的部分居中裁剪，不足屏幕的部分四周补黑。
+        frame_height, frame_width = frame.shape[:2]
+
+        crop_width = min(frame_width, screen_width)
+        crop_height = min(frame_height, screen_height)
+        x_start = max((frame_width - crop_width) // 2, 0)
+        y_start = max((frame_height - crop_height) // 2, 0)
+        frame_cropped = frame[y_start:y_start + crop_height, x_start:x_start + crop_width]
+
+        frame_padded = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+        y_offset = max((screen_height - crop_height) // 2, 0)
+        x_offset = max((screen_width - crop_width) // 2, 0)
+        frame_padded[y_offset:y_offset + crop_height, x_offset:x_offset + crop_width] = frame_cropped
+        frame = frame_padded
     elif is_resize == 1:
         # 按照屏幕长宽比进行缩放，无法填满屏幕的部分填黑
         aspect_ratio = screen_width / screen_height

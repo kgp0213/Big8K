@@ -11,7 +11,6 @@ import {
   RefreshCw,
   CheckCircle2,
   Server,
-  MonitorSmartphone,
 } from "lucide-react";
 import { useConnection } from "../App";
 import { isTauri, tauriInvoke } from "../utils/tauri";
@@ -62,6 +61,11 @@ type HostNetworkInfo = {
   adapters: string[];
 };
 
+type HostNetworkCard = {
+  name: string;
+  ipv4: string;
+};
+
 function getButtonToneClass(tone?: DeployAction["tone"]) {
   switch (tone) {
     case "warning":
@@ -86,22 +90,15 @@ export default function DeployTab() {
     browserPreview
       ? {
           summary: "当前电脑已接入 192.168.137.x 调试网段，可直接和 8K 平台联调。",
-          adapters: ["以太网 1：192.168.137.10 / 255.255.255.0", "Wi‑Fi：172.20.10.5 / 255.255.255.240"],
+          adapters: [
+            "以太网 1: IPv4=192.168.137.10",
+            "Wi‑Fi: IPv4=172.20.10.5",
+          ],
         }
       : null,
   );
 
   const adbReady = connection.type === "adb" && connection.connected;
-  const connectionSummary = useMemo(() => {
-    if (connection.type === "adb" && connection.connected) {
-      return `当前通过 ADB 连接：${connection.deviceId ?? "未识别设备"}`;
-    }
-    if (connection.type === "ssh" && connection.connected) {
-      return `当前通过 SSH 连接：${connection.ip ?? "未知地址"}`;
-    }
-    return "";
-  }, [connection]);
-
   const actionMap = useMemo(() => new Map(deployActions.map((item) => [item.command, item] as const)), []);
 
   const stepSummary = useMemo(() => {
@@ -111,6 +108,78 @@ export default function DeployTab() {
   }, [completedActions]);
 
   const readyHint = adbReady ? "已满足 ADB 前置条件，可继续执行脚本。" : "此页多数脚本依赖 ADB，建议先在右侧连接面板接上 8K 平台。";
+
+  const networkCards = useMemo<HostNetworkCard[]>(() => {
+    if (!hostNetworkInfo) return [];
+    return hostNetworkInfo.adapters
+      .map((item) => {
+        const [namePart, restPart = ""] = item.split(": ");
+        const fields = Object.fromEntries(
+          restPart.split(" / ").map((part) => {
+            const [key, ...valueParts] = part.split("=");
+            return [key, valueParts.join("=") || "-"];
+          }),
+        );
+        return {
+          name: namePart || "未知网卡",
+          ipv4: fields.IPv4 || "无 IPv4",
+        };
+      })
+      .filter((item) => {
+        const name = item.name.toLowerCase();
+        const isPhysicalLike =
+          name.includes("ethernet") ||
+          name.includes("eth") ||
+          name.includes("以太网") ||
+          name.includes("wi-fi") ||
+          name.includes("wifi") ||
+          name.includes("wlan") ||
+          name.includes("无线");
+        const isVirtualLike =
+          name.includes("vmware") ||
+          name.includes("vethernet") ||
+          name.includes("virtual") ||
+          name.includes("bluetooth") ||
+          name.includes("蓝牙") ||
+          name.includes("wsl");
+        return isPhysicalLike && !isVirtualLike && item.ipv4 !== "无 IPv4";
+      });
+  }, [hostNetworkInfo]);
+
+  const handleViewLocalIp = async () => {
+    if (browserPreview) {
+      const previewInfo = {
+        summary: "浏览器预览：当前演示主机已准备好本地网络信息。",
+        adapters: ["以太网 1: IPv4=192.168.137.10", "USB 网卡: IPv4=192.168.1.23"],
+      };
+      setHostNetworkInfo(previewInfo);
+      setLastActionMessage("浏览器预览：已读取演示网络信息。");
+      appendLog("浏览器预览：已读取演示网络信息。", "success");
+      return;
+    }
+
+    setIsLoadingLocalIp(true);
+    try {
+      const result = await tauriInvoke<{ success: boolean; output: string; error?: string }>("get_local_network_info");
+      if (result.success) {
+        const adapters = (result.output || "")
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        setHostNetworkInfo({
+          summary: adapters[0] || "已读取本机网络信息",
+          adapters,
+        });
+        setLastActionMessage("已读取本机 IP 地址与网卡信息。");
+      } else {
+        appendLog(result.error || result.output || "读取本机 IP 地址失败", "error");
+      }
+    } catch (error) {
+      appendLog(`读取本机 IP 地址异常: ${String(error)}`, "error");
+    } finally {
+      setIsLoadingLocalIp(false);
+    }
+  };
 
   const handleSetStaticIp = async (preset: typeof STATIC_IP_PRESETS[0]) => {
     setSelectedPresetIp(preset.ip);
@@ -140,42 +209,6 @@ export default function DeployTab() {
       appendLog(`设置静态 IP 异常: ${String(error)}`, "error");
     } finally {
       setIsSettingIp(false);
-    }
-  };
-
-  const handleViewLocalIp = async () => {
-    if (browserPreview) {
-      const previewInfo = {
-        summary: "浏览器预览：当前演示主机已准备好本地网络信息。",
-        adapters: ["以太网 1：192.168.137.10 / 255.255.255.0", "USB 网卡：192.168.1.23 / 255.255.255.0"],
-      };
-      setHostNetworkInfo(previewInfo);
-      setLastActionMessage("浏览器预览：已读取演示网络信息。");
-      appendLog("浏览器预览：已读取演示网络信息。", "success");
-      return;
-    }
-
-    setIsLoadingLocalIp(true);
-    try {
-      const result = await tauriInvoke<{ success: boolean; output: string; error?: string }>("get_local_network_info");
-      if (result.success) {
-        const adapters = (result.output || "")
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean);
-        setHostNetworkInfo({
-          summary: adapters[0] || "已读取本机网络信息",
-          adapters,
-        });
-        setLastActionMessage("已读取本机 IP 地址与网卡信息。");
-        appendLog(result.output || "已读取本机 IP 地址", "success");
-      } else {
-        appendLog(result.error || result.output || "读取本机 IP 地址失败", "error");
-      }
-    } catch (error) {
-      appendLog(`读取本机 IP 地址异常: ${String(error)}`, "error");
-    } finally {
-      setIsLoadingLocalIp(false);
     }
   };
 
@@ -227,30 +260,20 @@ export default function DeployTab() {
           配置部署
         </div>
         <div className="panel-body space-y-3">
-          {connectionSummary ? (
-            <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-3 text-sm text-blue-800 dark:text-blue-200">
-              {connectionSummary}
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-            <div className="rounded-xl border border-gray-200 dark:border-gray-700 px-4 py-3 bg-white dark:bg-gray-900/30">
-              <div className="text-xs text-gray-500 dark:text-gray-400">页面定位</div>
-              <div className="mt-1 text-sm font-semibold text-gray-800 dark:text-gray-100">脚本部署 / 网络初始化 / 平台模式切换</div>
-            </div>
-            <div className="rounded-xl border border-gray-200 dark:border-gray-700 px-4 py-3 bg-white dark:bg-gray-900/30">
-              <div className="text-xs text-gray-500 dark:text-gray-400">执行前提</div>
-              <div className={`mt-1 text-sm font-semibold ${adbReady ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400"}`}>{readyHint}</div>
-            </div>
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_280px] gap-3 items-stretch">
             <div className="rounded-xl border border-gray-200 dark:border-gray-700 px-4 py-3 bg-white dark:bg-gray-900/30">
               <div className="text-xs text-gray-500 dark:text-gray-400">部署进度</div>
-              <div className="mt-1 flex items-center justify-between gap-3">
+              <div className="mt-2 flex items-center justify-between gap-3">
                 <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{stepSummary.done} / {stepSummary.total}</div>
                 <div className="flex-1 h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
                   <div className="h-full bg-primary-500 transition-all" style={{ width: `${stepSummary.percent}%` }} />
                 </div>
                 <div className="text-xs text-gray-500">{stepSummary.percent}%</div>
               </div>
+            </div>
+            <div className="rounded-xl border border-gray-200 dark:border-gray-700 px-4 py-3 bg-white dark:bg-gray-900/30">
+              <div className="text-xs text-gray-500 dark:text-gray-400">执行前提</div>
+              <div className={`mt-2 text-sm font-semibold ${adbReady ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400"}`}>{readyHint}</div>
             </div>
           </div>
 
@@ -262,7 +285,7 @@ export default function DeployTab() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1.2fr)_420px] gap-4 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_340px] gap-4 items-start">
         <div className="panel">
           <div className="panel-header flex items-center gap-2">
             <Upload className="w-4 h-4" />
@@ -289,6 +312,7 @@ export default function DeployTab() {
                       const isRunning = runningAction === item.command;
                       const isDone = Boolean(item.command && completedActions.includes(item.command));
                       const itemIndex = deployActions.findIndex((candidate) => candidate.command === item.command);
+                      const displayIndex = itemIndex === 4 ? 6 : itemIndex === 5 ? 5 : itemIndex + 1;
 
                       return (
                         <button
@@ -301,7 +325,7 @@ export default function DeployTab() {
                         >
                           <div className="flex items-start gap-3">
                             <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-black/5 text-xs font-semibold dark:bg-white/10">
-                              {isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : isDone ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600 dark:text-green-400" /> : itemIndex + 1}
+                              {isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : isDone ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600 dark:text-green-400" /> : displayIndex}
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center justify-between gap-2">
@@ -364,7 +388,7 @@ export default function DeployTab() {
             </div>
             <div className="panel-body space-y-4">
               <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/20 px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
-                用于查看当前电脑的网卡与 IP 地址，便于和 8K 平台联调。
+                点击后快速读取本机有线 / 无线网卡 IPv4，虚拟网卡与蓝牙网卡会自动过滤。
               </div>
               <button
                 type="button"
@@ -382,26 +406,17 @@ export default function DeployTab() {
                     <Server className="w-4 h-4 text-primary-500" />
                     本机网卡摘要
                   </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-300">{hostNetworkInfo.summary}</div>
-                  <div className="space-y-2 text-xs text-gray-500 dark:text-gray-400">
-                    {hostNetworkInfo.adapters.map((item) => (
-                      <div key={item} className="rounded-lg bg-gray-50 dark:bg-gray-800 px-3 py-2">{item}</div>
+                  <div className="text-sm text-gray-600 dark:text-gray-300">{networkCards.length > 0 ? `已筛选出 ${networkCards.length} 个有线 / 无线网卡` : hostNetworkInfo.summary}</div>
+                  <div className="grid grid-cols-1 gap-2 text-xs text-gray-500 dark:text-gray-400">
+                    {networkCards.map((item) => (
+                      <div key={item.name} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-3 space-y-1">
+                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">{item.name}</div>
+                        <div>IPv4：{item.ipv4}</div>
+                      </div>
                     ))}
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="panel-header flex items-center gap-2">
-              <MonitorSmartphone className="w-4 h-4" />
-              使用建议
-            </div>
-            <div className="panel-body space-y-3 text-sm text-gray-600 dark:text-gray-300">
-              <div>· 这一页主要负责脚本部署、平台网络初始化，以及把 8K 平台切到合适的工作模式。</div>
-              <div>· “点屏配置 / 命令调试”更偏向点亮屏幕与直接控制屏幕；“配置部署”更像环境准备与脚本下发。</div>
-              <div>· 如果当前只是浏览器看 UI，可以直接点击按钮体验流程；切回 Tauri 后再接真实命令。</div>
             </div>
           </div>
         </div>
