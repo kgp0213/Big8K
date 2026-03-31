@@ -1,4 +1,4 @@
-export type TabType = "home" | "mipi" | "fb" | "power" | "network" | "debug";
+export type TabType = "home" | "mipi" | "fb" | "power" | "deploy" | "debug";
 export type ConnectionType = "adb" | "ssh" | "disconnected";
 export type LogLevel = "info" | "success" | "warning" | "error" | "debug";
 

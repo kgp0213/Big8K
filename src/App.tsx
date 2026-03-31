@@ -6,7 +6,7 @@ import StatusBar from "./components/StatusBar";
 import MipiTab from "./tabs/MipiTab";
 import FramebufferTab from "./tabs/FramebufferTab";
 import PowerRailsTab from "./tabs/PowerRailsTab";
-import NetworkTab from "./tabs/NetworkTab";
+import DeployTab from "./tabs/DeployTab";
 import DebugTab from "./tabs/DebugTab";
 import { tabs } from "./features/app/tabs";
 import { isTauri } from "./utils/tauri";
@@ -93,8 +93,8 @@ function App() {
         return <FramebufferTab />;
       case "power":
         return <PowerRailsTab />;
-      case "network":
-        return <NetworkTab />;
+      case "deploy":
+        return <DeployTab />;
       case "debug":
         return <DebugTab />;
       default:

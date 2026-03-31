@@ -1,10 +1,23 @@
 import { useMemo, useState } from "react";
-import { Globe, Loader2, Wifi, Wrench, Upload, Play, TerminalSquare, Settings2, RefreshCw, CheckCircle2, Server, MonitorSmartphone } from "lucide-react";
+import {
+  Globe,
+  Loader2,
+  Wifi,
+  Wrench,
+  Upload,
+  Play,
+  TerminalSquare,
+  Settings2,
+  RefreshCw,
+  CheckCircle2,
+  Server,
+  MonitorSmartphone,
+} from "lucide-react";
 import { useConnection } from "../App";
 import { isTauri, tauriInvoke } from "../utils/tauri";
 import type { ActionResult } from "../features/connection/types";
 
-type InitAction = {
+type DeployAction = {
   label: string;
   description: string;
   icon: typeof Wrench;
@@ -12,7 +25,7 @@ type InitAction = {
   command?: string;
 };
 
-const initActions: InitAction[] = [
+const deployActions: DeployAction[] = [
   { label: "Install tools", description: "部署 Python 库和工具", icon: Upload, command: "deploy_install_tools" },
   { label: "Install App", description: "部署刷图应用", icon: Upload, command: "deploy_install_app" },
   { label: "Set default pattern L128", description: "设置默认灰阶画面", icon: Play, command: "deploy_set_default_pattern" },
@@ -26,7 +39,7 @@ const STATIC_IP_PRESETS = [
   { label: "192.168.137.100", ip: "192.168.137.100", gateway: "192.168.137.1", description: "对应旧版 SetStaticIPaddress137100ToolStripMenuItem_Click" },
 ];
 
-const ACTION_GROUPS = [
+const DEPLOY_ACTION_GROUPS = [
   {
     title: "基础环境",
     description: "先把脚本和依赖装齐，后续画面同步、应用下发都依赖这里。",
@@ -44,12 +57,12 @@ const ACTION_GROUPS = [
   },
 ] as const;
 
-type LocalNetworkInfo = {
+type HostNetworkInfo = {
   summary: string;
   adapters: string[];
 };
 
-function getButtonToneClass(tone?: InitAction["tone"]) {
+function getButtonToneClass(tone?: DeployAction["tone"]) {
   switch (tone) {
     case "warning":
       return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300";
@@ -60,7 +73,7 @@ function getButtonToneClass(tone?: InitAction["tone"]) {
   }
 }
 
-export default function NetworkTab() {
+export default function DeployTab() {
   const { connection, appendLog } = useConnection();
   const browserPreview = !isTauri();
   const [isSettingIp, setIsSettingIp] = useState(false);
@@ -69,11 +82,11 @@ export default function NetworkTab() {
   const [completedActions, setCompletedActions] = useState<string[]>([]);
   const [selectedPresetIp, setSelectedPresetIp] = useState<string | null>(null);
   const [lastActionMessage, setLastActionMessage] = useState<string>(browserPreview ? "浏览器预览模式下会使用演示结果，不会真正下发脚本。" : "");
-  const [localNetworkInfo, setLocalNetworkInfo] = useState<LocalNetworkInfo | null>(
+  const [hostNetworkInfo, setHostNetworkInfo] = useState<HostNetworkInfo | null>(
     browserPreview
       ? {
           summary: "当前电脑已接入 192.168.137.x 调试网段，可直接和 8K 平台联调。",
-          adapters: ["以太网 1：192.168.137.10 / 255.255.255.0", "Wi-Fi：172.20.10.5 / 255.255.255.240"],
+          adapters: ["以太网 1：192.168.137.10 / 255.255.255.0", "Wi‑Fi：172.20.10.5 / 255.255.255.240"],
         }
       : null,
   );
@@ -89,10 +102,10 @@ export default function NetworkTab() {
     return "";
   }, [connection]);
 
-  const actionMap = useMemo(() => new Map(initActions.map((item) => [item.command, item] as const)), []);
+  const actionMap = useMemo(() => new Map(deployActions.map((item) => [item.command, item] as const)), []);
 
   const stepSummary = useMemo(() => {
-    const total = initActions.length;
+    const total = deployActions.length;
     const done = completedActions.length;
     return { total, done, percent: total === 0 ? 0 : Math.round((done / total) * 100) };
   }, [completedActions]);
@@ -113,6 +126,7 @@ export default function NetworkTab() {
       appendLog("请先通过 ADB 连接 8K 平台，再设置静态 IP", "warning");
       return;
     }
+
     setIsSettingIp(true);
     appendLog(`开始设置 8K 平台静态 IP：${preset.ip}，网关：${preset.gateway}`, "info");
     try {
@@ -135,7 +149,7 @@ export default function NetworkTab() {
         summary: "浏览器预览：当前演示主机已准备好本地网络信息。",
         adapters: ["以太网 1：192.168.137.10 / 255.255.255.0", "USB 网卡：192.168.1.23 / 255.255.255.0"],
       };
-      setLocalNetworkInfo(previewInfo);
+      setHostNetworkInfo(previewInfo);
       setLastActionMessage("浏览器预览：已读取演示网络信息。");
       appendLog("浏览器预览：已读取演示网络信息。", "success");
       return;
@@ -149,7 +163,7 @@ export default function NetworkTab() {
           .split(/\r?\n/)
           .map((line) => line.trim())
           .filter(Boolean);
-        setLocalNetworkInfo({
+        setHostNetworkInfo({
           summary: adapters[0] || "已读取本机网络信息",
           adapters,
         });
@@ -165,7 +179,7 @@ export default function NetworkTab() {
     }
   };
 
-  const handleInitAction = async (action: InitAction) => {
+  const handleDeployAction = async (action: DeployAction) => {
     if (!action.command) {
       appendLog(`「${action.label}」当前先完成 UI 占位，功能接线待补。`, "warning");
       return;
@@ -186,6 +200,7 @@ export default function NetworkTab() {
       appendLog(`请先通过 ADB 连接 8K 平台，再执行「${action.label}」`, "warning");
       return;
     }
+
     setRunningAction(action.command);
     appendLog(`开始执行：${action.label}`, "info");
     try {
@@ -258,7 +273,7 @@ export default function NetworkTab() {
               刷机后的快速初始化流程，按顺序执行更稳妥。
             </div>
             <div className="space-y-4">
-              {ACTION_GROUPS.map((group) => (
+              {DEPLOY_ACTION_GROUPS.map((group) => (
                 <div key={group.title} className="rounded-2xl border border-gray-200 dark:border-gray-700 p-4 space-y-3">
                   <div>
                     <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{group.title}</div>
@@ -273,13 +288,13 @@ export default function NetworkTab() {
                       const Icon = item.icon;
                       const isRunning = runningAction === item.command;
                       const isDone = Boolean(item.command && completedActions.includes(item.command));
-                      const itemIndex = initActions.findIndex((candidate) => candidate.command === item.command);
+                      const itemIndex = deployActions.findIndex((candidate) => candidate.command === item.command);
 
                       return (
                         <button
                           key={item.label}
                           type="button"
-                          onClick={() => void handleInitAction(item)}
+                          onClick={() => void handleDeployAction(item)}
                           disabled={(!adbReady && !browserPreview) || Boolean(runningAction)}
                           className={`rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${getButtonToneClass(item.tone)}`}
                           title={adbReady || browserPreview ? item.description : "请先连接 8K 平台"}
@@ -319,7 +334,7 @@ export default function NetworkTab() {
             </div>
             <div className="panel-body space-y-4">
               <div className="rounded-xl border border-blue-100 dark:border-blue-900/50 bg-blue-50/70 dark:bg-blue-900/10 px-4 py-3 text-sm text-blue-700 dark:text-blue-300">
-                常用部署场景保留为一键切换，点击后直接把 8K 平台设置成对应 IP。
+                常用部署场景保留为一键切换，点击后直接把 8K 平台设置成对口 IP。
               </div>
               <div className="space-y-3">
                 {STATIC_IP_PRESETS.map((preset) => (
@@ -361,15 +376,15 @@ export default function NetworkTab() {
                 查看本机 IP 地址
               </button>
 
-              {localNetworkInfo && (
+              {hostNetworkInfo && (
                 <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-4 space-y-3">
                   <div className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-gray-100">
                     <Server className="w-4 h-4 text-primary-500" />
                     本机网卡摘要
                   </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-300">{localNetworkInfo.summary}</div>
+                  <div className="text-sm text-gray-600 dark:text-gray-300">{hostNetworkInfo.summary}</div>
                   <div className="space-y-2 text-xs text-gray-500 dark:text-gray-400">
-                    {localNetworkInfo.adapters.map((item) => (
+                    {hostNetworkInfo.adapters.map((item) => (
                       <div key={item} className="rounded-lg bg-gray-50 dark:bg-gray-800 px-3 py-2">{item}</div>
                     ))}
                   </div>

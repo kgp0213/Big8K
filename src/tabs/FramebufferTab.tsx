@@ -15,7 +15,6 @@ import {
   Trash2,
   FileCode,
   Video,
-  Pause,
   Square,
 } from "lucide-react";
 import { useConnection } from "../App";
@@ -129,9 +128,6 @@ export default function FramebufferTab() {
   const [remoteFileList, setRemoteFileList] = useState<string[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [videoZoomMode, setVideoZoomMode] = useState(0);
-  const [showFramerate, setShowFramerate] = useState(false);
-  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [isScriptRunning, setIsScriptRunning] = useState(false);
 
   const isConnected = connection.connected && connection.type === "adb";
@@ -506,58 +502,41 @@ export default function FramebufferTab() {
     }
   };
 
-  // 视频播放
+  // 视频播放（严格对齐 C# btn_graphical_target_Click，独立于下方视频工作区）
   const handleVideoPlay = async () => {
     if (!isConnected) {
       appendLog("请先连接 ADB 设备", "warning");
       return;
     }
-    if (!selectedFileName) {
-      appendLog("请先从列表中选择一个视频文件", "warning");
-      return;
-    }
 
-    appendLog(`播放视频: ${selectedFileName}`, "info");
-    setIsVideoPlaying(true);
+    appendLog("视频播放 -> 按 C# btn_graphical_target_Click 独立部署 default_movie", "info");
     try {
-      const result = await tauriInvoke<{ success: boolean; error?: string }>("play_video", {
-        request: {
-          video_path: `${remotePath}${selectedFileName}`,
-          zoom_mode: videoZoomMode,
-          show_framerate: showFramerate ? 1 : 0
-        }
-      });
-
+      const result = await tauriInvoke<{ success: boolean; output?: string; error?: string }>("deploy_set_default_movie");
       if (result.success) {
-        appendLog(`视频播放已启动`, "success");
+        appendLog(result.output || "开机自动播放视频脚本添加完成", "success");
       } else {
-        appendLog(result.error || "视频播放失败", "error");
-        setIsVideoPlaying(false);
+        appendLog(result.error || result.output || "视频播放失败", "error");
       }
     } catch (err) {
       appendLog(`视频播放异常: ${String(err)}`, "error");
-      setIsVideoPlaying(false);
     }
   };
 
-  // 视频暂停
-  const handleVideoPause = async () => {
-    try {
-      await tauriInvoke("send_video_control", { request: { action: "pause" } });
-      appendLog("视频已暂停", "info");
-    } catch (err) {
-      appendLog(`暂停失败: ${String(err)}`, "error");
+  const handleDemoSetDefaultPattern = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
     }
-  };
-
-  // 视频停止
-  const handleVideoStop = async () => {
+    appendLog("设置默认灰阶画面 -> Set default pattern L128", "info");
     try {
-      await tauriInvoke("send_video_control", { request: { action: "stop" } });
-      appendLog("视频已停止", "info");
-      setIsVideoPlaying(false);
+      const result = await tauriInvoke<{ success: boolean; output?: string; error?: string }>("deploy_set_default_pattern");
+      if (result.success) {
+        appendLog(result.output || "开机刷白脚本推送完成并运行！", "success");
+      } else {
+        appendLog(result.error || result.output || "设置默认灰阶失败", "error");
+      }
     } catch (err) {
-      appendLog(`停止失败: ${String(err)}`, "error");
+      appendLog(`设置默认灰阶异常: ${String(err)}`, "error");
     }
   };
 
@@ -569,13 +548,13 @@ export default function FramebufferTab() {
     }
     appendLog("循环播放图片脚本生成中...", "info");
     try {
-      const result = await tauriInvoke<{ success: boolean; error?: string }>("setup_loop_images", {
+      const result = await tauriInvoke<{ success: boolean; output?: string; error?: string }>("setup_loop_images", {
         request: { image_path: FILE_TYPE_CONFIG.image.path }
       });
       if (result.success) {
-        appendLog("循环播放图片已设置，重启后生效", "success");
+        appendLog(result.output || "循环播放图片脚本推送完成并运行！", "success");
       } else {
-        appendLog(result.error || "设置循环播放失败", "error");
+        appendLog(result.error || result.output || "设置循环播放失败", "error");
       }
     } catch (err) {
       appendLog(`设置循环播放异常: ${String(err)}`, "error");
@@ -888,7 +867,22 @@ export default function FramebufferTab() {
               DEMO
             </div>
             <div className="panel-body space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
+                <button
+                  onClick={() => void handleDemoSetDefaultPattern()}
+                  disabled={!isConnected}
+                  className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-4 text-left transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-900/30">
+                      <Monitor className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-semibold">Set default pattern L128</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">设置默认灰阶画面</div>
+                    </div>
+                  </div>
+                </button>
                 <button
                   onClick={() => void handleLoopImages()}
                   disabled={!isConnected}
@@ -906,7 +900,7 @@ export default function FramebufferTab() {
                 </button>
                 <button
                   onClick={() => void handleVideoPlay()}
-                  disabled={!isConnected || !selectedFileName || isVideoPlaying}
+                  disabled={!isConnected}
                   className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-4 text-left transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <div className="flex items-center gap-3">
@@ -915,63 +909,12 @@ export default function FramebufferTab() {
                     </div>
                     <div>
                       <div className="text-sm font-semibold">视频播放</div>
-                      <div className="text-xs text-gray-500 dark:text-gray-400">播放选中的视频文件</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">按 C# default_movie 流程设置</div>
                     </div>
                   </div>
                 </button>
               </div>
 
-              {/* 视频控制 */}
-              {fileType === "video" && (
-                <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-3">
-                  <div className="text-sm font-semibold">视频控制</div>
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-500">缩放模式:</span>
-                      <select
-                        value={videoZoomMode}
-                        onChange={(e) => setVideoZoomMode(Number(e.target.value))}
-                        className="input text-xs py-1 px-2"
-                      >
-                        <option value={0}>原始大小</option>
-                        <option value={1}>适应屏幕</option>
-                        <option value={2}>填充屏幕</option>
-                      </select>
-                    </div>
-                    <label className="inline-flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={showFramerate}
-                        onChange={(e) => setShowFramerate(e.target.checked)}
-                      />
-                      显示帧率
-                    </label>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => void handleVideoPlay()}
-                      disabled={isVideoPlaying || !selectedFileName}
-                      className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-60"
-                    >
-                      <Play className="w-3.5 h-3.5" /> 播放
-                    </button>
-                    <button
-                      onClick={() => void handleVideoPause()}
-                      disabled={!isVideoPlaying}
-                      className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-60"
-                    >
-                      <Pause className="w-3.5 h-3.5" /> 暂停
-                    </button>
-                    <button
-                      onClick={() => void handleVideoStop()}
-                      disabled={!isVideoPlaying}
-                      className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-60"
-                    >
-                      <Square className="w-3.5 h-3.5" /> 停止
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 

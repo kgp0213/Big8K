@@ -142,6 +142,23 @@ struct RunRemoteScriptRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct SetupLoopImagesRequest {
+    image_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PlayVideoRequest {
+    video_path: String,
+    zoom_mode: i32,
+    show_framerate: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct VideoControlRequest {
+    action: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StaticIpRequest {
     pub ip: String,
     pub gateway: String,
@@ -2614,12 +2631,16 @@ fn deploy_install_tools(state: tauri::State<Mutex<ConnectionState>>) -> GenericR
 /// UI分组: 默认显示与模式(含SSH) + 系统UI(仅graphical)
 /// 对齐 C# 的 ADB_AutorunApp_Setup，保持简洁但保留日志
 fn deploy_autorun_bundle(state: &tauri::State<Mutex<ConnectionState>>, bundle_dir: &Path, logs: &mut Vec<String>) -> Result<(), String> {
+    logs.push(format!("开始部署 autorun bundle: {}", bundle_dir.display()));
+
     let autorun = bundle_dir.join("autorun.py");
+    logs.push(format!("检查 autorun.py: {}", autorun.display()));
     if !autorun.exists() {
         return Err(format!("缺少 autorun.py: {}", autorun.display()));
     }
 
     let service_dir = resolve_deploy_resource_dir("resources/deploy/fb-RunApp/default", Some("fb_RunApp/default"))?;
+    logs.push(format!("service 目录: {}", service_dir.display()));
     let service_candidates = [
         service_dir.join("big8k-autorun.service"),
         service_dir.join("chenfeng-service.service"),
@@ -2633,33 +2654,126 @@ fn deploy_autorun_bundle(state: &tauri::State<Mutex<ConnectionState>>, bundle_di
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .ok_or_else(|| "无效 service 文件名".to_string())?;
+    logs.push(format!("使用 service 文件: {}", service_file.display()));
 
-    // 对齐 C#：只做必要的操作，不额外创建目录
     let _ = adb_shell_internal(state, "rm -f /vismm/autorun.py");
     logs.push("已删除旧 autorun.py".to_string());
 
-    adb_push_path(state, &autorun, "/vismm/fbshow/autorun.py")?;
-    adb_shell_internal(state, "chmod 444 /vismm/fbshow/autorun.py")?;
+    let push_fbshow = adb_push_path(state, &autorun, "/vismm/fbshow/autorun.py")?;
+    if !push_fbshow.success {
+        return Err(push_fbshow.error.unwrap_or_else(|| "推送 /vismm/fbshow/autorun.py 失败".to_string()));
+    }
     logs.push("已推送 autorun.py -> /vismm/fbshow/autorun.py".to_string());
+    run_shell_required(state, "chmod 444 /vismm/fbshow/autorun.py")?;
+    logs.push("已设置 /vismm/fbshow/autorun.py 权限".to_string());
 
-    adb_push_path(state, &autorun, "/vismm/autorun.py")?;
-    adb_shell_internal(state, "chmod 444 /vismm/autorun.py")?;
+    let push_root = adb_push_path(state, &autorun, "/vismm/autorun.py")?;
+    if !push_root.success {
+        return Err(push_root.error.unwrap_or_else(|| "推送 /vismm/autorun.py 失败".to_string()));
+    }
     logs.push("已推送 autorun.py -> /vismm/autorun.py".to_string());
+    run_shell_required(state, "chmod 444 /vismm/autorun.py")?;
+    logs.push("已设置 /vismm/autorun.py 权限".to_string());
 
-    adb_push_path(state, &service_file, &format!("/etc/systemd/system/{}", service_name))?;
-    logs.push(format!("已推送 {}", service_name));
+    let push_service = adb_push_path(state, &service_file, &format!("/etc/systemd/system/{}", service_name))?;
+    if !push_service.success {
+        return Err(push_service.error.unwrap_or_else(|| format!("推送 service 失败: {}", service_name)));
+    }
+    logs.push(format!("已推送 {} -> /etc/systemd/system/{}", service_name, service_name));
 
-    adb_shell_internal(state, "systemctl daemon-reload")?;
+    let daemon_reload = run_shell_required(state, "systemctl daemon-reload")?;
     logs.push("已执行 systemctl daemon-reload".to_string());
+    if !daemon_reload.trim().is_empty() {
+        logs.push(format!("daemon-reload 输出: {}", daemon_reload.trim()));
+    }
 
-    adb_shell_internal(state, &format!("systemctl enable {}", service_name))?;
+    let enable_output = run_shell_required(state, &format!("systemctl enable {}", service_name))?;
     logs.push(format!("已执行 systemctl enable {}", service_name));
+    if !enable_output.trim().is_empty() {
+        logs.push(format!("enable 输出: {}", enable_output.trim()));
+    }
 
-    adb_shell_internal(state, &format!("systemctl restart {}", service_name))?;
+    let restart_output = run_shell_required(state, &format!("systemctl restart {}", service_name))?;
     logs.push(format!("已执行 systemctl restart {}", service_name));
+    if !restart_output.trim().is_empty() {
+        logs.push(format!("restart 输出: {}", restart_output.trim()));
+    }
 
     logs.push(format!("autorun 部署完成 ({})", service_name));
     Ok(())
+}
+
+fn deploy_named_autorun_bundle(
+    state: &tauri::State<Mutex<ConnectionState>>,
+    resource_relative: &str,
+    legacy_relative: &str,
+    success_message: &str,
+) -> GenericResult {
+    let bundle_dir = match resolve_deploy_resource_dir(resource_relative, Some(legacy_relative)) {
+        Ok(path) => path,
+        Err(error) => {
+            return GenericResult {
+                success: false,
+                output: String::new(),
+                error: Some(error),
+            };
+        }
+    };
+
+    let mut logs = Vec::new();
+    match deploy_autorun_bundle(state, &bundle_dir, &mut logs) {
+        Ok(_) => {
+            logs.push(success_message.to_string());
+            GenericResult {
+                success: true,
+                output: logs.join("\n"),
+                error: None,
+            }
+        }
+        Err(error) => GenericResult {
+            success: false,
+            output: logs.join("\n"),
+            error: Some(error),
+        },
+    }
+}
+
+fn set_default_target_and_reboot(state: &tauri::State<Mutex<ConnectionState>>, target: &str) -> GenericResult {
+    let mut logs = Vec::new();
+    match run_shell_required(state, &format!("systemctl set-default {}", target)) {
+        Ok(output) => {
+            logs.push(format!("已切换为 {}", target));
+            if !output.trim().is_empty() {
+                logs.push(output.trim().to_string());
+            }
+        }
+        Err(error) => {
+            return GenericResult {
+                success: false,
+                output: logs.join("\n"),
+                error: Some(error),
+            };
+        }
+    }
+
+    match run_shell_required(state, "reboot") {
+        Ok(output) => {
+            logs.push("已执行 reboot".to_string());
+            if !output.trim().is_empty() {
+                logs.push(output.trim().to_string());
+            }
+            GenericResult {
+                success: true,
+                output: logs.join("\n"),
+                error: None,
+            }
+        }
+        Err(error) => GenericResult {
+            success: false,
+            output: logs.join("\n"),
+            error: Some(error),
+        },
+    }
 }
 
 #[tauri::command]
@@ -2813,50 +2927,27 @@ fn deploy_install_app(state: tauri::State<Mutex<ConnectionState>>) -> GenericRes
 
 #[tauri::command]
 fn deploy_set_default_pattern(state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
-    let default_bundle = match resolve_deploy_resource_dir("resources/deploy/fb-RunApp/default", Some("fb_RunApp/default")) {
-        Ok(path) => path,
-        Err(error) => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some(error),
-            };
-        }
-    };
+    deploy_named_autorun_bundle(
+        &state,
+        "resources/deploy/fb-RunApp/default",
+        "fb_RunApp/default",
+        "开机刷白脚本推送完成并运行",
+    )
+}
 
-    let mut logs = Vec::new();
-    match deploy_autorun_bundle(&state, &default_bundle, &mut logs) {
-        Ok(_) => {
-            logs.push("开机刷白脚本推送完成并运行".to_string());
-            GenericResult { success: true, output: logs.join("\n"), error: None }
-        }
-        Err(error) => GenericResult { success: false, output: logs.join("\n"), error: Some(error) },
-    }
+#[tauri::command]
+fn deploy_set_default_movie(state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
+    deploy_named_autorun_bundle(
+        &state,
+        "resources/deploy/fb-RunApp/default_movie",
+        "fb_RunApp/default_movie",
+        "开机自动播放视频脚本推送完成并运行",
+    )
 }
 
 #[tauri::command]
 fn deploy_set_multi_user(state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
-    let mut logs = Vec::new();
-    match run_shell_required(&state, "systemctl set-default multi-user.target") {
-        Ok(output) => {
-            logs.push("已切换为 multi-user.target".to_string());
-            if !output.trim().is_empty() {
-                logs.push(output.trim().to_string());
-            }
-        }
-        Err(error) => return GenericResult { success: false, output: logs.join("\n"), error: Some(error) },
-    }
-
-    match run_shell_required(&state, "reboot") {
-        Ok(output) => {
-            logs.push("已执行 reboot".to_string());
-            if !output.trim().is_empty() {
-                logs.push(output.trim().to_string());
-            }
-            GenericResult { success: true, output: logs.join("\n"), error: None }
-        }
-        Err(error) => GenericResult { success: false, output: logs.join("\n"), error: Some(error) },
-    }
+    set_default_target_and_reboot(&state, "multi-user.target")
 }
 
 #[tauri::command]
@@ -3087,6 +3178,62 @@ fn stop_remote_script(state: tauri::State<Mutex<ConnectionState>>) -> GenericRes
     }
 }
 
+#[tauri::command]
+fn setup_loop_images(_request: SetupLoopImagesRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
+    let bundle_dir = match resolve_deploy_resource_dir("resources/deploy/fb-RunApp/default_bmp", Some("fb_RunApp/default_bmp")) {
+        Ok(path) => path,
+        Err(error) => {
+            return GenericResult { success: false, output: String::new(), error: Some(error) };
+        }
+    };
+
+    let mut logs = Vec::new();
+    match deploy_autorun_bundle(&state, &bundle_dir, &mut logs) {
+        Ok(_) => {
+            logs.push("循环播放图片脚本推送完成并运行！".to_string());
+            GenericResult { success: true, output: logs.join("\n"), error: None }
+        }
+        Err(error) => GenericResult { success: false, output: logs.join("\n"), error: Some(error) },
+    }
+}
+
+#[tauri::command]
+fn play_video(_request: PlayVideoRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
+    let bundle_dir = match resolve_deploy_resource_dir("resources/deploy/fb-RunApp/default_movie", Some("fb_RunApp/default_movie")) {
+        Ok(path) => path,
+        Err(error) => {
+            return GenericResult { success: false, output: String::new(), error: Some(error) };
+        }
+    };
+
+    let mut logs = Vec::new();
+    match deploy_autorun_bundle(&state, &bundle_dir, &mut logs) {
+        Ok(_) => {
+            logs.push("开机自动播放视频脚本添加完成!".to_string());
+            GenericResult { success: true, output: logs.join("\n"), error: None }
+        }
+        Err(error) => GenericResult { success: false, output: logs.join("\n"), error: Some(error) },
+    }
+}
+
+#[tauri::command]
+fn send_video_control(request: VideoControlRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
+    let command = match request.action.as_str() {
+        "pause" => "pkill -STOP -f 'python3 /vismm/autorun.py|python3 /vismm/fbshow/autorun.py|chenfeng_movie.py'",
+        "resume" => "pkill -CONT -f 'python3 /vismm/autorun.py|python3 /vismm/fbshow/autorun.py|chenfeng_movie.py'",
+        "stop" => "killall python3",
+        other => {
+            return GenericResult { success: false, output: String::new(), error: Some(format!("不支持的视频控制动作: {}", other)) };
+        }
+    };
+
+    match adb_shell_internal(&state, command) {
+        Ok(result) if result.success => GenericResult { success: true, output: result.output, error: None },
+        Ok(result) => GenericResult { success: false, output: result.output, error: result.error.or(Some("视频控制失败".to_string())) },
+        Err(error) => GenericResult { success: false, output: String::new(), error: Some(error) },
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -3120,6 +3267,9 @@ pub fn run() {
             display_image_from_base64,
             display_remote_image,
             display_image,
+            setup_loop_images,
+            play_video,
+            send_video_control,
             mipi_send_command,
             mipi_send_commands,
             mipi_software_reset,
@@ -3139,6 +3289,7 @@ pub fn run() {
             deploy_install_tools,
             deploy_install_app,
             deploy_set_default_pattern,
+            deploy_set_default_movie,
             deploy_set_multi_user,
             deploy_set_graphical,
             list_remote_files,

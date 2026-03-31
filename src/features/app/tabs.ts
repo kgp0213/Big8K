@@ -7,6 +7,6 @@ export const tabs: { id: TabType; label: string; icon: LucideIcon }[] = [
   { id: "debug", label: "命令调试", icon: Terminal },
   { id: "fb", label: "显示画面", icon: Image },
   { id: "power", label: "电源读取", icon: Cpu },
-  { id: "network", label: "配置部署", icon: Network },
+  { id: "deploy", label: "配置部署", icon: Network },
   { id: "home", label: "总览", icon: Home },
 ];
