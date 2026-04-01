@@ -98,7 +98,6 @@ let imagePanelCache: {
   resolutionFilterEnabled: boolean;
   sortMode: ImageSortMode;
   viewMode: ImageViewMode;
-  uploadedImageMap: Record<string, string>;
 } | null = null;
 
 function getFileExtension(fileName: string) {
@@ -118,7 +117,9 @@ export default function FramebufferTab() {
   const [resolutionFilterEnabled, setResolutionFilterEnabled] = useState(imagePanelCache?.resolutionFilterEnabled || false);
   const [sortMode, setSortMode] = useState<ImageSortMode>(imagePanelCache?.sortMode || "name");
   const [viewMode, setViewMode] = useState<ImageViewMode>(imagePanelCache?.viewMode || "grid");
-  const [uploadedImageMap, setUploadedImageMap] = useState<Record<string, string>>(imagePanelCache?.uploadedImageMap || {});
+  const [remoteBmpFiles, setRemoteBmpFiles] = useState<string[]>([]);
+  const [selectedRemoteBmp, setSelectedRemoteBmp] = useState<string>("");
+  const [isLoadingRemoteBmpFiles, setIsLoadingRemoteBmpFiles] = useState(false);
   const [disconnectedLogged, setDisconnectedLogged] = useState(false);
 
   // 文件工作区状态
@@ -165,9 +166,8 @@ export default function FramebufferTab() {
       resolutionFilterEnabled,
       sortMode,
       viewMode,
-      uploadedImageMap,
     };
-  }, [folderImageEntries, imagePath, imageSearch, resolutionFilterEnabled, sortMode, viewMode, uploadedImageMap]);
+  }, [folderImageEntries, imagePath, imageSearch, resolutionFilterEnabled, sortMode, viewMode]);
 
   useEffect(() => {
     return () => {
@@ -229,17 +229,8 @@ export default function FramebufferTab() {
 
     const selectedEntry = folderImageEntries.find((item) => item.path === requestedPath || item.realPath === requestedPath);
     const pathToUse = (selectedEntry?.realPath || requestedPath).trim();
-    const cacheKey = selectedEntry?.realPath || selectedEntry?.path || requestedPath;
-    const remoteFileName = `${cacheKey.replace(/[^a-zA-Z0-9._-]/g, "_")}.png`;
-    const remotePath = `/data/local/tmp/big8k_images/${remoteFileName}`;
-    const cachedRemote = uploadedImageMap[cacheKey];
-
-    if (cachedRemote) {
-      appendLog(`显示图片 -> ${selectedEntry?.name || pathToUse.split(/[\\/]/).pop() || pathToUse}`, "info");
-      if (debugMode) appendLog(`-> adb shell python3 /data/local/tmp/fb_image_display.py ${cachedRemote}`, "debug");
-      await runCommand("display_remote_image", { remoteImagePath: cachedRemote }, "display_image", "图片上屏（缓存）");
-      return;
-    }
+    const originalName = (selectedEntry?.name || pathToUse.split(/[\\/]/).pop() || "input.bmp").trim();
+    const remoteFileName = originalName.replace(/[^a-zA-Z0-9._-]/g, "_") || "input.bmp";
 
     if (selectedEntry?.file && !selectedEntry?.realPath) {
       try {
@@ -257,7 +248,7 @@ export default function FramebufferTab() {
           "图片上屏"
         );
         if (ok) {
-          setUploadedImageMap((prev) => ({ ...prev, [cacheKey]: remotePath }));
+          appendLog(`已重新推送并显示 -> ${remoteFileName}`, "success");
         }
       } catch (err) {
         showMessage("error", `图片读取失败: ${String(err)}`);
@@ -277,11 +268,51 @@ export default function FramebufferTab() {
       "图片上屏"
     );
     if (ok) {
-      setUploadedImageMap((prev) => ({ ...prev, [cacheKey]: remotePath }));
+      appendLog(`已重新推送并显示 -> ${remoteFileName}`, "success");
     }
   };
 
   const handleChooseImage = () => fileInputRef.current?.click();
+
+  const handleLoadRemoteBmpFiles = async () => {
+    if (!isConnected) {
+      appendLog("请先连接 ADB 设备", "warning");
+      return;
+    }
+
+    setIsLoadingRemoteBmpFiles(true);
+    appendLog("查看目录: /vismm/fbshow/bmp_online/", "info");
+    try {
+      const result = await tauriInvoke<{ success: boolean; files: string[]; error?: string }>("list_remote_files", {
+        request: { path: "/vismm/fbshow/bmp_online/" },
+      });
+      if (result.success && result.files) {
+        const files = result.files.filter((file: string) => getFileExtension(file) === ".bmp");
+        setRemoteBmpFiles(files);
+        appendLog(`找到 ${files.length} 个远端 BMP 文件`, "success");
+      } else {
+        setRemoteBmpFiles([]);
+        appendLog(result.error || "获取远端 BMP 列表失败", "error");
+      }
+    } catch (err) {
+      setRemoteBmpFiles([]);
+      appendLog(`获取远端 BMP 列表异常: ${String(err)}`, "error");
+    } finally {
+      setIsLoadingRemoteBmpFiles(false);
+    }
+  };
+
+  const handleDisplayRemoteBmp = async (file: string) => {
+    const fileName = file.trim();
+    if (!fileName) return;
+    setSelectedRemoteBmp(fileName);
+    await runCommand(
+      "display_remote_image",
+      { remoteImagePath: `/vismm/fbshow/bmp_online/${fileName}` },
+      "display_image",
+      `显示远端 BMP: ${fileName}`,
+    );
+  };
 
   const handlePatternDisplay = async (pattern: string) => {
     if (!isConnected) {
@@ -724,7 +755,6 @@ export default function FramebufferTab() {
   }, [folderImageEntries, imageSearch, resolutionFilterEnabled, currentResolution, sortMode]);
 
   const currentImage = folderImageEntries.find((item) => item.path === imagePath);
-  const currentImageMatched = currentImage ? isResolutionMatched(currentImage) : false;
   const displayFullPath = currentImage?.realPath || currentImage?.path || "";
   const hasWorkspaceSelection = selectedFileInput.trim().length > 0;
   const isScriptWorkspaceActive = fileType === "script";
@@ -860,52 +890,55 @@ export default function FramebufferTab() {
                   <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 overflow-hidden">
                     <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
                       <div>
-                        <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">步骤 3：确认并显示</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">当前选中的图片会显示在这里，确认后上屏。</div>
+                        <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">远端 BMP 列表</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">读取 `/vismm/fbshow/bmp_online/` 目录，双击文件直接调用 fbShowBmp 显示。</div>
                       </div>
-                      <span className="text-xs text-gray-500 dark:text-gray-400">老手可直接双击左侧图片快速上屏</span>
+                      <button
+                        onClick={() => void handleLoadRemoteBmpFiles()}
+                        disabled={!isConnected || isLoadingRemoteBmpFiles}
+                        className="btn-secondary flex items-center gap-2 shrink-0"
+                      >
+                        {isLoadingRemoteBmpFiles ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderTree className="w-4 h-4" />}
+                        {isLoadingRemoteBmpFiles ? "读取中..." : "读取远端 BMP"}
+                      </button>
                     </div>
                     <div className="p-4 space-y-4">
-                      <div className="aspect-video rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex items-center justify-center overflow-hidden">
-                        {currentImage?.previewUrl ? <img src={currentImage.previewUrl} alt={currentImage.name} className="w-full h-full object-contain bg-black/5" /> : <Monitor className="w-12 h-12 text-gray-400" />}
-                      </div>
-
-                      <div className="space-y-3">
-                        <div>
-                          <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">即将上屏的图片</div>
-                          <input value={imagePath} onChange={(e) => setImagePath(e.target.value)} className="input text-sm" placeholder="从左侧图片列表中选择，或手动输入完整路径" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
-                          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50/60 dark:bg-gray-800/40">
-                            <div className="text-[11px] text-gray-500 dark:text-gray-400">文件名</div>
-                            <div className="mt-1 font-medium text-gray-800 dark:text-gray-100 break-all">{currentImage?.name || "尚未选择图片"}</div>
-                          </div>
-                          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50/60 dark:bg-gray-800/40">
-                            <div className="text-[11px] text-gray-500 dark:text-gray-400">分辨率</div>
-                            <div className="mt-1 font-medium text-gray-800 dark:text-gray-100">{currentImage?.width && currentImage?.height ? `${currentImage.width} × ${currentImage.height}` : "未读取尺寸"}</div>
-                          </div>
-                          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50/60 dark:bg-gray-800/40">
-                            <div className="text-[11px] text-gray-500 dark:text-gray-400">当前设备</div>
-                            <div className="mt-1 font-medium text-gray-800 dark:text-gray-100">{currentResolution ? currentResolution.label : "未读取分辨率"}</div>
-                          </div>
-                          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50/60 dark:bg-gray-800/40">
-                            <div className="text-[11px] text-gray-500 dark:text-gray-400">上屏状态</div>
-                            <div className="mt-1"><span className={`text-[11px] px-2 py-1 rounded-full ${currentImage ? (currentImageMatched ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300") : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>{currentImage ? (currentImageMatched ? "适配分辨率" : "未适配") : "待选择图片"}</span></div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col gap-2">
-                        <button onClick={() => void handleDisplayImage()} disabled={!isConnected || loading === "display_image" || !imagePath.trim()} className="btn-primary flex items-center justify-center gap-2">
-                          {loading === "display_image" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} 显示到屏幕
-                        </button>
-                      </div>
-
                       <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-3 text-xs text-gray-500 dark:text-gray-400 space-y-1">
-                        <div>· 当前仅支持 BMP 图片上屏</div>
-                        <div>· 适配分辨率表示与当前设备分辨率完全一致</div>
-                        <div>· 图片显示时不缩放，只做屏幕居中；四周不加白边</div>
-                        <div>· 同一张已发送图片再次显示时，不会重复上传</div>
+                        <div>· 步骤 1 选择本地 BMP；步骤 2 双击本地图片会重新推送并显示</div>
+                        <div>· 这里列的是板端 `/vismm/fbshow/bmp_online/` 目录里的 BMP 文件</div>
+                        <div>· 双击任意远端文件，将直接执行 `fbShowBmp` 显示</div>
+                      </div>
+
+                      <div className="max-h-[520px] overflow-auto rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/40">
+                        {remoteBmpFiles.length === 0 ? (
+                          <div className="px-4 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+                            先点“读取远端 BMP”，把 `/vismm/fbshow/bmp_online/` 目录文件加载出来。
+                          </div>
+                        ) : (
+                          <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+                            {remoteBmpFiles.map((file, index) => {
+                              const selected = selectedRemoteBmp === file;
+                              return (
+                                <li key={`${file}-${index}`}>
+                                  <button
+                                    onClick={() => setSelectedRemoteBmp(file)}
+                                    onDoubleClick={() => void handleDisplayRemoteBmp(file)}
+                                    className={`w-full px-4 py-3 text-left transition-colors ${selected ? "bg-primary-50 dark:bg-primary-900/20" : "hover:bg-white dark:hover:bg-gray-900/40"}`}
+                                    title={file}
+                                  >
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div className="min-w-0 flex items-center gap-2">
+                                        <Image className="w-4 h-4 text-gray-400 shrink-0" />
+                                        <span className="truncate text-sm text-gray-800 dark:text-gray-100">{file}</span>
+                                      </div>
+                                      <span className="text-[11px] text-gray-400 shrink-0">双击显示</span>
+                                    </div>
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -917,9 +950,9 @@ export default function FramebufferTab() {
           <div className="panel">
             <div className="panel-header">说明</div>
             <div className="panel-body text-sm space-y-2 text-gray-600 dark:text-gray-300">
-              <p>· 选择 BMP 后，会把本次选中的 BMP 文件载入列表中供预览和上屏</p>
-              <p>· 顶部路径框显示当前选中图片的完整路径</p>
-              <p>· 图片首次显示会发送到板端；再次显示同一张图时直接复用板端缓存</p>
+              <p>· 步骤 1 选择本地 BMP 后，会把本次选中的 BMP 文件载入步骤 2 列表</p>
+              <p>· 在步骤 2 双击本地 BMP，会重新推送到 `/vismm/fbshow/bmp_online/` 后再显示</p>
+              <p>· 右侧可读取板端 `/vismm/fbshow/bmp_online/` 目录；双击任意远端 BMP 可直接显示</p>
             </div>
           </div>
         </div>

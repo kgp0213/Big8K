@@ -56,14 +56,15 @@ const DEPLOY_ACTION_GROUPS = [
   },
 ] as const;
 
-type HostNetworkInfo = {
-  summary: string;
-  adapters: string[];
-};
-
 type HostNetworkCard = {
   name: string;
   ipv4: string;
+};
+
+type LocalNetworkInfo = {
+  success: boolean;
+  cards: HostNetworkCard[];
+  error?: string;
 };
 
 function getButtonToneClass(tone?: DeployAction["tone"]) {
@@ -86,13 +87,13 @@ export default function DeployTab() {
   const [completedActions, setCompletedActions] = useState<string[]>([]);
   const [selectedPresetIp, setSelectedPresetIp] = useState<string | null>(null);
   const [lastActionMessage, setLastActionMessage] = useState<string>(browserPreview ? "浏览器预览模式下会使用演示结果，不会真正下发脚本。" : "");
-  const [hostNetworkInfo, setHostNetworkInfo] = useState<HostNetworkInfo | null>(
+  const [localNetworkInfo, setLocalNetworkInfo] = useState<LocalNetworkInfo | null>(
     browserPreview
       ? {
-          summary: "当前电脑已接入 192.168.137.x 调试网段，可直接和 8K 平台联调。",
-          adapters: [
-            "以太网 1: IPv4=192.168.137.10",
-            "Wi‑Fi: IPv4=172.20.10.5",
+          success: true,
+          cards: [
+            { name: "以太网 1", ipv4: "192.168.137.10" },
+            { name: "Wi‑Fi", ipv4: "172.20.10.5" },
           ],
         }
       : null,
@@ -110,49 +111,19 @@ export default function DeployTab() {
   const readyHint = adbReady ? "已满足 ADB 前置条件，可继续执行脚本。" : "此页多数脚本依赖 ADB，建议先在右侧连接面板接上 8K 平台。";
 
   const networkCards = useMemo<HostNetworkCard[]>(() => {
-    if (!hostNetworkInfo) return [];
-    return hostNetworkInfo.adapters
-      .map((item) => {
-        const [namePart, restPart = ""] = item.split(": ");
-        const fields = Object.fromEntries(
-          restPart.split(" / ").map((part) => {
-            const [key, ...valueParts] = part.split("=");
-            return [key, valueParts.join("=") || "-"];
-          }),
-        );
-        return {
-          name: namePart || "未知网卡",
-          ipv4: fields.IPv4 || "无 IPv4",
-        };
-      })
-      .filter((item) => {
-        const name = item.name.toLowerCase();
-        const isPhysicalLike =
-          name.includes("ethernet") ||
-          name.includes("eth") ||
-          name.includes("以太网") ||
-          name.includes("wi-fi") ||
-          name.includes("wifi") ||
-          name.includes("wlan") ||
-          name.includes("无线");
-        const isVirtualLike =
-          name.includes("vmware") ||
-          name.includes("vethernet") ||
-          name.includes("virtual") ||
-          name.includes("bluetooth") ||
-          name.includes("蓝牙") ||
-          name.includes("wsl");
-        return isPhysicalLike && !isVirtualLike && item.ipv4 !== "无 IPv4";
-      });
-  }, [hostNetworkInfo]);
+    return localNetworkInfo?.cards ?? [];
+  }, [localNetworkInfo]);
 
   const handleViewLocalIp = async () => {
     if (browserPreview) {
-      const previewInfo = {
-        summary: "浏览器预览：当前演示主机已准备好本地网络信息。",
-        adapters: ["以太网 1: IPv4=192.168.137.10", "USB 网卡: IPv4=192.168.1.23"],
+      const previewInfo: LocalNetworkInfo = {
+        success: true,
+        cards: [
+          { name: "以太网 1", ipv4: "192.168.137.10" },
+          { name: "USB 网卡", ipv4: "192.168.1.23" },
+        ],
       };
-      setHostNetworkInfo(previewInfo);
+      setLocalNetworkInfo(previewInfo);
       setLastActionMessage("浏览器预览：已读取演示网络信息。");
       appendLog("浏览器预览：已读取演示网络信息。", "success");
       return;
@@ -160,19 +131,13 @@ export default function DeployTab() {
 
     setIsLoadingLocalIp(true);
     try {
-      const result = await tauriInvoke<{ success: boolean; output: string; error?: string }>("get_local_network_info");
+      const result = await tauriInvoke<LocalNetworkInfo>("get_local_network_info");
       if (result.success) {
-        const adapters = (result.output || "")
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean);
-        setHostNetworkInfo({
-          summary: adapters[0] || "已读取本机网络信息",
-          adapters,
-        });
-        setLastActionMessage("已读取本机 IP 地址与网卡信息。");
+        setLocalNetworkInfo(result);
+        setLastActionMessage(`已读取本机 IP 地址，筛选出 ${result.cards.length} 个有线/无线网卡。`);
+        appendLog(`已读取本机 IP 地址，筛选出 ${result.cards.length} 个有线/无线网卡。`, "success");
       } else {
-        appendLog(result.error || result.output || "读取本机 IP 地址失败", "error");
+        appendLog(result.error || "读取本机 IP 地址失败", "error");
       }
     } catch (error) {
       appendLog(`读取本机 IP 地址异常: ${String(error)}`, "error");
@@ -400,13 +365,13 @@ export default function DeployTab() {
                 查看本机 IP 地址
               </button>
 
-              {hostNetworkInfo && (
+              {localNetworkInfo && (
                 <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-4 space-y-3">
                   <div className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-gray-100">
                     <Server className="w-4 h-4 text-primary-500" />
                     本机网卡摘要
                   </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-300">{networkCards.length > 0 ? `已筛选出 ${networkCards.length} 个有线 / 无线网卡` : hostNetworkInfo.summary}</div>
+                  <div className="text-sm text-gray-600 dark:text-gray-300">{networkCards.length > 0 ? `已筛选出 ${networkCards.length} 个有线 / 无线网卡` : localNetworkInfo.error ?? "未找到有线/无线网卡"}</div>
                   <div className="grid grid-cols-1 gap-2 text-xs text-gray-500 dark:text-gray-400">
                     {networkCards.map((item) => (
                       <div key={item.name} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-3 space-y-1">

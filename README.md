@@ -1,576 +1,525 @@
 # Big8K Tauri UI
 
-Big8K Tauri UI 是 8K OLED 点屏平台的新一代上位机界面，基于 **Tauri + React + TypeScript + Rust**。
+Big8K Tauri UI 是 8K OLED 点屏平台的新一代上位机，基于 **Tauri + React + TypeScript + Rust**。
 
-这个工程的目标不是重新发明一套全新工具，而是逐步替代旧版 **C# WinForms 上位机**，把常用点屏、画面显示、连接管理等核心流程迁移到一个更容易维护、启动更轻、界面更现代的桌面应用里。
+它的目标不是另起炉灶重写一套工具，而是把旧版 **C# WinForms 上位机**里真正高频、关键、容易继续维护的链路，逐步迁到一个更轻、更清晰、更容易扩展的桌面应用里。
 
-## 1. 项目背景
+- 旧版 C# 工程：`E:\Resource\8Big8K\8K_software\PC-SW`
+- 新版 Tauri 工程：`E:\ai2026\Big8K-Tauri-UI`
 
-旧版上位机位于：
+---
+
+## 1. 当前定位
+
+当前仓库属于：
+
+- **能编译**
+- **能运行**
+- **能连板**
+- **能做基础点屏 / framebuffer / MIPI 调试**
+- **仍在持续对齐旧版 PC-SW 行为**
+
+原则上：
+
+- 先迁移高频主流程
+- 先对齐旧 C# 的真实行为
+- 先收口重复逻辑和易错逻辑
+- 不为了“看起来更整洁”去打断已验证正常的链路
+
+---
+
+## 2. 主要页面职责
+
+前端现在已经明确按“页面职责”在收口，避免一个页面既做状态展示又做执行操作。
+
+### `HomeTab`
+
+**职责：设备状态总览**
+
+主要放：
+- 设备连接摘要
+- CPU / 内存 / 温度等设备状态
+- 屏幕信息卡片
+- 最近日志
+
+设计原则：
+- 这里看状态，不堆执行入口
+- 让人一打开就知道设备现在活没活、屏幕现在是什么状态
+
+### `DeployTab`
+
+**职责：部署动作执行**
+
+主要放：
+- 安装 / 推送 / 重启类动作
+- 本机网络信息查询
+- 部署辅助操作
+
+设计原则：
+- 这里是“动手”的地方，不再承担首页状态总览职责
+- 本机网络信息**点击时才查询**，不在启动时自动预取，避免拖慢 exe 启动
+
+### `FramebufferTab`
+
+**职责：framebuffer 画面与媒体调试**
+
+主要放：
+- 纯色 / 渐变 / 测试图
+- 本地 BMP 上屏
+- 远端 BMP 列表读取与显示
+- 视频播放控制
+
+当前约定：
+- 本地 BMP 双击上屏，必须严格按旧 C# 行为：
+  1. 先 push 到板端
+  2. 再执行 `fbShowBmp`
+- **每次双击都重新 push**，不走缓存复用
+
+### `MipiTab`
+
+**职责：OLED / MIPI 点屏配置与命令调试**
+
+主要放：
+- Timing 参数
+- 初始化代码
+- 快捷命令
+- OLED 配置导入 / 导出
+- `vis-timing.bin` 生成与下载
+
+当前约定：
+- UI 中 `PCLK` 一律按 **kHz** 展示与编辑
+- 落到 bin / json 文件时，再换算回 **Hz**
+
+### `PowerRailsTab`
+
+**职责：电源轨读数与电源状态观察**
+
+### `DebugTab`
+
+**职责：调试辅助区 / 待迁移能力承接区**
+
+用于承接：
+- 旧版工具里还没完成迁移，但又确实需要保留的调试入口
+- 阶段性实验功能
+
+---
+
+## 3. 前端结构约定
+
+前端现在采用：
+- `tabs/` 负责页面壳和布局编排
+- `features/` 负责具体业务模块、类型、动作、局部组件、存储逻辑
+
+当前已经较明确的模块包括：
+
+```text
+src/
+├─ components/        # 跨页面通用组件
+├─ features/
+│  ├─ connection/     # 连接相关类型/辅助逻辑
+│  ├─ mipi/           # MIPI/OLED 相关局部组件与逻辑
+│  ├─ code-convert/   # 代码转换
+│  └─ ...
+├─ tabs/              # 页面级入口
+└─ utils/             # Tauri invoke、格式化等通用工具
+```
+
+整理原则：
+- 页面文件别继续无限变胖
+- 重复逻辑优先收进 `features/`
+- 不做“为了拆而拆”的空壳模块
+
+---
+
+## 4. 后端模块职责
+
+Rust 后端原来大量逻辑堆在 `src-tauri/src/lib.rs` 里，已经开始做第一轮拆分。
+
+### 当前状态
+
+```text
+src-tauri/src/
+├─ lib.rs        # Tauri 命令注册、主流程、暂存的核心逻辑
+├─ host_env.rs   # 宿主机侧环境/网卡信息读取
+└─ main.rs
+```
+
+### 已明确的模块职责
+
+#### `lib.rs`
+
+当前仍是主入口，负责：
+- Tauri 命令注册与导出
+- 连接状态管理
+- ADB / SSH 主流程
+- 当前尚未拆出的显示运行逻辑
+- 当前尚未拆出的 OLED 配置链路
+
+#### `host_env.rs`
+
+负责：
+- 本机网络信息读取
+- Windows / Unix 分支差异处理
+- 本机环境探测这一类“宿主机侧能力”
+
+之所以不用 `network.rs`，是因为这块职责不只是网络，后面还可能继续挂：
+- 本机路径探测
+- 本机环境能力检查
+- 宿主机侧系统信息读取
+
+`host_env` 比 `network` 更贴真实职责。
+
+### 后续计划中的拆分方向
+
+#### `oled_config.rs`
+
+计划承接：
+- 旧 `.bin` 点屏配置解析
+- OLED `.json` 配置解析
+- `vis-timing.bin` 生成
+- OLED 配置 json 导出
+- `PCLK` 单位换算相关逻辑
+
+#### `display_runtime.rs`
+
+计划承接：
+- 本地 BMP push + show
+- 远端 BMP show
+- framebuffer 运行时显示链路
+- 后续视频 / 图片显示相关运行逻辑
+
+原则：
+- 按职责拆，不按“文件长度”硬拆
+- 先拆最容易继续膨胀的块
+- 每拆一步都先 build/check 验证
+
+---
+
+## 5. 关键单位约定
+
+这块很重要，后续不要再混。
+
+### `PCLK`
+
+**统一约定：**
+
+- UI 中：`kHz`
+- bin / json 文件中：`Hz`
+
+也就是：
+- 用户在界面里看到和编辑的是 `125240`
+- 真正写进文件里的是 `125240000`
+
+### 为什么这样定
+
+因为：
+- UI 里用 Hz 数字太大，不利于编辑
+- 旧 bin / 导出文件实际保存的是 Hz
+- FPS 计算逻辑已经按 UI 的 kHz 在跑：
+  - `fps = (timing.pclk * 1000) / htotal / vtotal`
+
+### 当前已经对齐好的三条链路
+
+#### 1. 旧 `.bin` 导入
+- `Hz -> kHz`
+
+#### 2. 生成 `vis-timing.bin`
+- `kHz -> Hz`
+
+#### 3. 导出 OLED 配置 json
+- `kHz -> Hz`
+
+这三条现在必须保持同步，不能只修一半。
+
+---
+
+## 6. 关键路径约定
+
+### 6.1 工程与产物
+
+- 项目根目录：`E:\ai2026\Big8K-Tauri-UI`
+- Rust 后端：`E:\ai2026\Big8K-Tauri-UI\src-tauri`
+- Debug exe：`E:\ai2026\Big8K-Tauri-UI\src-tauri\target\debug\Big8K.exe`
+
+### 6.2 C# 参考工程
 
 - `E:\Resource\8Big8K\8K_software\PC-SW`
 
-旧版工程是一个典型的 Windows C# WinForms 工具，包含：
+凡是 Tauri 版本行为拿不准的地方，优先对照旧 C# 真实逻辑，不靠猜。
 
-- 主界面与大量 Designer 页面
-- ADB 相关控制逻辑
-- SSH / 网络相关操作
-- MIPI 点屏指令下发
-- framebuffer 画面显示能力
-- I2C / EEPROM / GPIO 等外围调试入口
+### 6.3 framebuffer / BMP 相关路径
 
-新工程位于：
+本地 BMP 上屏当前对齐的关键远端目录：
 
-- `E:\ai2026\Big8K-Tauri-UI`
+- `/vismm/fbshow/bmp_online/`
 
-新工程目前采用：
-
-- 前端：React + TypeScript + Vite + Tailwind CSS
-- 桌面壳：Tauri 2
-- 本地后端：Rust
-- 设备通信：ADB / SSH
-
-## 2. 当前工程定位
-
-当前版本属于：
-
-- **可开发**
-- **可运行**
-- **可连接板卡做基础调试**
-- **部分功能已接通真实能力**
-- **仍处于从旧版 PC-SW 迁移中的阶段**
-
-重点不是一次性完全复刻旧版 C# 上位机，而是优先迁移最常用、最有价值的链路。
-
-## 3. 已接入的核心能力
-
-### 3.1 连接管理
-
-- ADB 设备检测
-- ADB 设备选择
-- ADB over TCP 连接
-- ADB 断开
-- SSH 连接
-- 最近成功 SSH 地址记忆
-- 自动探测板卡基础能力：
-  - `/dev/fb0`
-  - `vismpwr`
-  - `python3`
-- ADB / SSH 连接成功后自动读取实际屏幕分辨率
-
-### 3.2 显示画面
-
-- 黑屏 / 红屏 / 绿屏 / 蓝屏 / 白屏
-- 灰阶渐变 / 红渐变 / 绿渐变 / 蓝渐变
-- 彩条
-- 棋盘格
-- 自定义文字上屏
-- 图片上传并显示
-- 清屏
-
-说明：
-
-- 当前快捷画面已经按设备实际 framebuffer 分辨率生成，不再固定写死某一个尺寸。
-- 板卡返回 `virtual_size` 时，兼容以下格式：
-  - `900,960`
-  - `900x960`
-  - `900×960`
-
-### 3.3 MIPI 点屏控制
-
-当前已接入的 Tauri 后端命令包括：
-
-- `mipi_send_command`
-- `mipi_send_commands`
-- `mipi_software_reset`
-- `mipi_read_power_mode`
-- `mipi_sleep_in`
-- `mipi_sleep_out`
-
-### 3.4 其他后端命令
-
-当前已接入：
-
-- `adb_devices`
-- `adb_select_device`
-- `adb_connect`
-- `adb_disconnect`
-- `adb_shell`
-- `adb_push`
-- `adb_pull`
-- `adb_probe_device`
-- `ssh_connect`
-- `ssh_exec`
-- `display_solid_color`
-- `display_gradient`
-- `display_color_bar`
-- `display_checkerboard`
-- `display_text`
-- `display_image`
-- `clear_screen`
-- `run_demo_screen`
-- `run_text_demo`
-- `run_poster_demo`
-
-## 4. 与旧版 PC-SW 的关系
-
-旧版 C# 上位机是功能母体，新版 Tauri UI 是迁移中的新桌面壳。
-
-可以把两者理解为：
-
-- **PC-SW**：旧主系统，功能大而全，但代码结构偏传统 WinForms
-- **Big8K-Tauri-UI**：新 UI 外壳，优先把高频功能做成更清晰的交互和更容易维护的代码
-
-### 当前已明显迁移/对应的方向
-
-- 连接管理（ADB / SSH）
-- 屏幕显示 / framebuffer 调试
-- MIPI 指令下发
-- 调试型页面骨架
-
-### 仍然在迁移中的方向
-
-- I2C / EEPROM
-- GPIO
-- 网络配置
-- 脚本管理
-- 更完整的调试命令流程
-- 旧版工程中的更多业务细节和边缘流程
-
-## 5. 仓库整理说明
-
-本仓库只保留**主工程源码、必要配置、运行所需脚本**。
-
-以下内容不再纳入版本库主线：
-
-- 本地截图脚本
-- 邮件发送脚本
-- 临时调试 probe
-- 过程记录型日志文件
-- Tauri 自动生成的 schema / 辅助描述文件
-- 放在本地 `examples/` 中的临时测试文件
-
-这类文件统一建议放在开发机本地 `examples/` 目录中，便于自用，但不影响别人拿到源码后直接编译。
-
-## 6. 目录结构
-
-当前目录结构已经从最早的“单页 + 若干 tab 文件”逐步整理为“tab 壳 + features 模块”。
-
-```text
-Big8K-Tauri-UI/
-├─ src/
-│  ├─ App.tsx
-│  ├─ main.tsx
-│  ├─ styles.css
-│  ├─ components/
-│  │  ├─ ConnectionPanel.tsx
-│  │  └─ StatusBar.tsx
-│  ├─ features/
-│  │  ├─ connection/
-│  │  │  ├─ constants.ts
-│  │  │  ├─ helpers.ts
-│  │  │  └─ types.ts
-│  │  ├─ mipi/
-│  │  │  ├─ actions.ts
-│  │  │  ├─ constants.ts
-│  │  │  ├─ storage.ts
-│  │  │  ├─ types.ts
-│  │  │  ├─ RecentConfigMenu.tsx
-│  │  │  ├─ TimingPanel.tsx
-│  │  │  ├─ DriverCodePanel.tsx
-│  │  │  └─ QuickActionsPanel.tsx
-│  │  ├─ debug/
-│  │  └─ code-convert/
-│  ├─ tabs/
-│  │  ├─ HomeTab.tsx
-│  │  ├─ MipiTab.tsx
-│  │  ├─ FramebufferTab.tsx
-│  │  ├─ PowerRailsTab.tsx
-│  │  ├─ NetworkTab.tsx
-│  │  └─ DebugTab.tsx
-│  └─ utils/
-│     ├─ tauri.ts
-│     └─ codeFormatter.ts
-├─ src-tauri/
-│  ├─ Cargo.toml
-│  ├─ tauri.conf.json
-│  └─ src/
-│     ├─ main.rs
-│     └─ lib.rs
-├─ python/
-│  ├─ fb_demo.py
-│  ├─ fb_text_demo.py
-│  ├─ fb_text_poster.py
-│  ├─ runtime_fbshow/
-│  └─ ...
-├─ examples/                # 本地临时测试文件，不纳入仓库
-├─ package.json
-└─ README.md
-```
-
-说明：
-
-- `tabs/` 更偏页面入口与布局编排
-- `features/` 用来承载具体功能模块的类型、动作、局部组件、存储逻辑
-- 当前已优先整理了 `mipi/` 和 `connection/`，后续可以继续按同样方式整理其他模块
-
-## 6. 开发环境要求
-
-建议在 **Windows 10/11** 下开发和运行。
-
-至少需要以下环境：
-
-### 6.1 Node.js
-
-推荐：
-
-- Node.js 20+
-
-当前工程实测环境里使用的是 Node 22，也可正常工作。
-
-### 6.2 Rust
-
-需要安装：
-
-- Rust toolchain
-- Cargo
-
-可用以下命令确认：
+远端显示命令：
 
 ```bash
-rustc --version
-cargo --version
+./vismm/fbshow/fbShowBmp /vismm/fbshow/bmp_online/{fileName}
 ```
 
-### 6.3 Tauri 2 CLI
+### 6.4 Python 运行脚本路径
 
-项目本地依赖里已经包含：
+工程内关键脚本示例：
+- `python/fb_image_display.py`
 
-- `@tauri-apps/cli`
+运行时临时下发路径示例：
+- `/data/local/tmp/fb_image_display.py`
 
-通常不需要全局单独安装。
+---
 
-### 6.4 Windows 构建依赖
+## 7. 这两天踩过并已经定下来的调试细节
 
-如果你要在 Windows 上真正编译 Tauri 桌面程序，建议系统具备：
+这部分专门写给后续接手的人，省得再踩一遍。
 
-- Visual Studio 2022 Build Tools 或 Visual Studio 2022
-- Desktop development with C++ 相关组件
-- WebView2 Runtime（一般较新的 Windows 已自带）
+### 7.1 不要用 PowerShell 批量替换源码
 
-### 6.5 板卡通信依赖
+已经验证过会引发：
+- 中文字符编码污染
+- 文件内容损坏
+- 回滚成本变高
 
-本项目依赖以下外部工具/环境：
+当前约定：
+- **只用精确小步 edit**
+- 一次只改一小块
+- 每改完立刻 build/check
 
-- `adb` 需要已安装并加入 `PATH`
-- 目标板卡需要支持：
-  - ADB
-  - 或 SSH
-- 若使用 framebuffer 显示相关功能，板端通常需要：
-  - `/dev/fb0`
-  - `python3`
-- 若使用 MIPI 相关指令，下位机侧需要存在：
-  - `vismpwr`
+### 7.2 Windows 本机网络信息不要自动预取
 
-### 6.6 SSH 改为真正按需启用
+原因：
+- 会拖慢 exe 启动
+- 用户并不是每次启动都需要看本机 IP
 
-当前仓库的 Rust 后端已把 SSH 能力做成 **可选 feature**：
+当前实现：
+- 点击时才执行
+- Windows 走：
 
-- 默认构建 **不包含 SSH**
-- 只有在明确需要时才在编译阶段启用 SSH
+```bash
+cmd /C chcp 65001>nul & ipconfig
+```
 
-对应配置见：
+### 7.3 Windows 网络信息不要再走 PowerShell 编码链
 
-- `src-tauri/Cargo.toml`
-  - `ssh2 = { version = "0.9", optional = true }`
-  - `ssh = ["dep:ssh2"]`
+已踩坑：
+- 之前乱码
+- 解析不稳
 
-这样做的目的主要是：
+当前做法：
+- 后端直接解析 `ipconfig`
+- 返回结构化 `LocalNetworkInfo`
 
-- 减少默认构建依赖
-- 避免不需要 SSH 的环境额外处理相关 native 依赖
-- 让“只做 ADB / 点屏 / framebuffer 调试”的场景编译更直接
+### 7.4 网卡展示规则已经定死
 
-如果你在**未启用 SSH feature** 的情况下运行程序：
+只显示：
+- 有线 / 无线网卡
+- IPv4
 
-- 界面仍可正常启动
-- ADB 相关能力不受影响
-- 调用 SSH 连接或 SSH 执行命令时，会返回“当前构建未启用 SSH 功能”
+排除：
+- VMware
+- vEthernet
+- WSL
+- Docker / veth / virbr
+- 蓝牙
+- 其他虚拟网卡
 
-### 6.7 关于 OLED 配置 bin 的命名说明
+### 7.5 本地 BMP 上屏必须严格对齐 C#
 
-为避免歧义，仓库里和界面里凡是指向这类面板时序/初始化二进制配置文件的地方，推荐统一理解为：
+不要偷懒做缓存命中。
 
-- **OLED config bin**
-- **OLED 配置 bin**
+当前要求：
+- 先 push
+- 再 `fbShowBmp`
+- **每次双击都重新 push**
 
-这里不再推荐使用“LCD bin”这种说法，因为当前项目面向的是 OLED 点屏调试场景，用 OLED config bin 更准确。
+因为这才符合旧上位机的直觉和现场调试预期。
 
-当前对应操作主要包括：
+### 7.6 “打开 OLED 配置”保持单入口双格式
 
-- 打开 OLED 配置
-- 加载历史 OLED 配置
-- 导出 OLED 配置
-- 根据当前 Timing / 初始化代码生成 OLED config bin
+不要拆成两个按钮。
 
-### 6.8 如何在编译时启用 SSH
+当前要求：
+- 一个入口
+- 自动兼容：
+  - `.bin`
+  - `.json`
 
-如果你需要真正使用 SSH 连接板卡，请在 Rust / Tauri 构建阶段显式带上 `ssh` feature。
+### 7.7 MIPI 快捷命令区已经做了防误触
 
-#### 开发调试（启用 SSH，直接走 Cargo）
+当前危险操作：
+- `关屏`
+- `开屏`
+- `Software Reset`
+
+已经落实：
+- 单独分区
+- 点击二次确认
+
+但按当前 UI 决策：
+- 去掉“高风险操作”标题
+- 去掉一堆解释文案
+- 只保留分区样式 + 确认弹窗
+
+### 7.8 默认验证动作
+
+除非另行说明，代码调整后默认执行：
+
+1. `cargo build`
+2. 重新拉起 exe
+
+这是当前项目约定，不再每次重复确认。
+
+---
+
+## 8. 开发环境与常用命令
+
+### 安装前端依赖
+
+```bash
+npm install
+```
+
+### 仅构建前端
+
+```bash
+npm run build
+```
+
+### Rust 检查
+
+```bash
+cd src-tauri
+cargo check
+```
+
+### 构建 debug exe
+
+```bash
+cd src-tauri
+cargo build
+```
+
+### 开发模式运行
+
+```bash
+npm run tauri dev
+```
+
+### 仅生成 release exe
+
+```bash
+cd src-tauri
+cargo build --release --bin Big8K
+```
+
+---
+
+## 9. SSH feature 说明
+
+Rust 后端的 SSH 能力目前是 **可选 feature**。
+
+### 默认构建
+- 不包含 SSH
+- 更适合只做 ADB / framebuffer / MIPI 调试
+
+### 启用 SSH
 
 ```bash
 cd src-tauri
 cargo run --features ssh --bin Big8K
 ```
 
-#### 生成 release 可执行文件（启用 SSH，直接走 Cargo）
-
-```bash
-cd src-tauri
-cargo build --release --features ssh --bin Big8K
-```
-
-#### 通过 Tauri CLI 开发运行（启用 SSH）
-
-如果你希望继续从项目根目录使用 Tauri CLI，也可以这样写：
+或：
 
 ```bash
 npm run tauri dev -- --features ssh
 ```
 
-#### 通过 Tauri CLI 打包（启用 SSH）
-
-```bash
-npm run tauri build -- --features ssh
-```
-
-生成产物通常位于：
-
-```text
-src-tauri/target/release/Big8K.exe
-```
-
-如果你不带 `--features ssh`，那么即使前端和 Tauri 打包流程都正常完成，最终产物仍然是**不含 SSH 能力**的版本。
-
-### 6.8 ADB-only / SSH-enabled 构建对照
-
-为了避免拿到源码的人搞不清楚，最常见可以直接分成两种构建方式：
-
-#### ADB-only 构建（默认）
-
-适用场景：
-
-- 只需要 ADB 调试
-- 只做点屏 / framebuffer / MIPI 指令测试
-- 不想额外引入 SSH 相关依赖
-
-命令示例：
-
-```bash
-npm install
-npm run tauri dev
-```
-
-或：
-
-```bash
-npm install
-npm run tauri build
-```
-
-特点：
-
-- 默认可直接编译
-- SSH 按钮/流程若被调用，会提示“当前构建未启用 SSH 功能”
-- 更适合大多数只连 ADB 的日常开发环境
-
-#### SSH-enabled 构建（按需启用）
-
-适用场景：
-
-- 需要通过 SSH 连板卡
-- 需要执行板端 shell 命令
-- 需要 ADB + SSH 混合调试
-
-命令示例：
-
-```bash
-npm install
-npm run tauri dev -- --features ssh
-```
-
-或：
-
-```bash
-npm install
-npm run tauri build -- --features ssh
-```
-
-也可以直接走 Cargo：
-
-```bash
-cd src-tauri
-cargo build --release --features ssh --bin Big8K
-```
-
-特点：
-
-- 编译产物包含 SSH 能力
-- 可正常使用 `ssh_connect` / `ssh_exec` 等后端命令
-- 更适合需要真正远程登录板卡的联调环境
-
-## 7. 安装依赖
-
-在项目根目录执行：
-
-```bash
-npm install
-```
-
-## 8. 开发模式运行
-
-推荐开发时直接使用 Tauri dev：
-
-```bash
-npm run tauri dev
-```
-
-这会同时做两件事：
-
-1. 启动前端开发服务器（Vite）
-2. 启动 Tauri 桌面程序
-
-注意：
-
-- `http://localhost:1421/` 这个地址只适合看前端页面
-- **真正的 ADB / SSH / Tauri invoke 功能，必须在 Tauri 桌面窗口里测试**
-- 如果你在浏览器里直接点需要 Tauri 后端的按钮，会看到类似：
-
-```text
-Not in Tauri environment
-```
-
-这是正常现象，因为浏览器环境没有 Tauri runtime。
-
-## 9. 构建方式
-
-### 9.1 仅构建前端静态资源
-
-```bash
-npm run build
-```
-
-构建产物输出到：
-
-- `dist/`
-
-### 9.2 仅生成 exe（不打安装包）
-
-如果你只是想得到 Windows 可执行文件，可以在 `src-tauri` 目录执行：
-
-```bash
-cargo build --release --bin Big8K
-```
-
-产物路径通常为：
-
-```text
-src-tauri/target/release/Big8K.exe
-```
-
-### 9.3 Tauri 正常打包
-
-```bash
-npm run tauri build
-```
-
-这会先跑前端 build，再走 Tauri 的 bundle 流程。
-
-## 10. 运行流程建议
-
-建议实际调试时按这个顺序：
-
-1. 启动 Tauri dev
-2. 在右侧连接面板选择 ADB 或 SSH
-3. 确认已读取到：
-   - 设备型号
-   - 屏幕分辨率
-   - 位深
-4. 再进入：
-   - `OLED 配置`
-   - `显示画面`
-5. 做具体测试
-
-这样可以避免在未连接或环境不满足时直接点功能按钮。
-
-## 11. 已知说明
-
-### 11.1 实际分辨率读取
-
-当前连接成功后，会读取：
-
-- `/sys/class/graphics/fb0/virtual_size`
-- `/sys/class/graphics/fb0/bits_per_pixel`
-
-并把结果用于快捷测试画面的生成。
-
-### 11.2 Demo 脚本
-
-当前仓库根目录下的这些 Python 脚本：
-
-- `fb_demo.py`
-- `fb_text_demo.py`
-- `fb_text_poster.py`
-- `fb_text_custom.py`
-- `fb_image_display.py`
-
-用于 framebuffer 相关显示。
-
-其中部分脚本仍然保留较强的演示属性，后续还可以继续做更彻底的动态分辨率适配与功能梳理。
-
-### 11.3 页面成熟度
-
-当前较成熟的模块主要是：
-
-- `ConnectionPanel`
-- `HomeTab`
-- `MipiTab`
-- `FramebufferTab`
-
-以下页面仍偏占位或半成品：
-
-- `DebugTab`
-- `NetworkTab`
-- 更完整的功能拆分与继续模块化整理
-- 旧版外设调试能力按需要逐步迁移
-
-## 12. 最小可用编译步骤（给新拿到源码的人）
-
-如果你只是要“拿到源码后先编出来并跑起来”，最短步骤如下：
-
-```bash
-npm install
-npm run tauri dev
-```
-
-如果你只是要生成 exe：
-
-```bash
-npm install
-cd src-tauri
-cargo build --release --bin Big8K
-```
-
-## 13. 后续建议
-
-如果后续继续完善这个仓库，建议优先做：
-
-1. 把 `显示画面` 里的 Demo 脚本全部统一成按真实分辨率生成
-2. 继续把旧版 PC-SW 的关键流程做迁移映射
-3. 给 `DebugTab / NetworkTab / 其他待迁移功能页` 接入真实后端逻辑
-4. 梳理旧版工程中的板端工具、脚本和资源哪些需要纳入新仓库
+如果未启用 SSH feature：
+- 程序能正常启动
+- ADB 相关能力不受影响
+- 调 SSH 命令时会提示当前构建未启用 SSH
 
 ---
 
-如果你是第一次接手这个项目，建议先从 **连接面板 + 显示画面 + MIPI 指令** 这三块开始读代码，这三块最接近当前可用主流程。
+## 10. 接手建议
+
+如果你是第一次接手这个项目，推荐按下面顺序读：
+
+1. `ConnectionPanel` / 连接主流程
+2. `HomeTab` / 当前设备状态展示
+3. `FramebufferTab` / BMP 与视频链路
+4. `MipiTab` / OLED 配置、Timing、快捷命令
+5. `src-tauri/src/lib.rs`
+6. `src-tauri/src/host_env.rs`
+7. 旧 C# 工程对照实现
+
+别一上来就全局大重构，先抓住：
+- 页面职责
+- 后端职责
+- 单位约定
+- 路径约定
+- 与旧 C# 的行为一致性
+
+---
+
+## 11. 后续 README / Skill 方向
+
+后面可以继续往两条线补：
+
+### 11.1 README 继续增强
+
+可以再补：
+- 各页面和旧 C# 页面的一一映射
+- 常用调试操作手册
+- 常见报错排查清单
+- 板端依赖清单
+- 视频链路和 BMP 链路的详细时序说明
+
+### 11.2 生成 8K 点屏相关 skill
+
+这块很值得做，后续可以基于这份 README 和现有代码/约定，整理出一个专门的 skill，例如：
+
+- `big8k-panel-debug`
+- `oled-panel-bringup`
+- `8k-display-debug`
+
+skill 里可以固化：
+- 页面职责
+- 后端模块职责
+- `PCLK` 单位约定
+- 远端路径约定
+- BMP / MIPI / OLED 配置链路
+- 与旧 C# 对齐原则
+- 常见误操作防护规则
+
+这样后面无论是新同事接手，还是让 Agent 继续迭代，都不需要每次重新口头交代一遍。
+
+---
+
+## 12. 当前结论
+
+这个工程现在**不是不能维护**，但已经出现“再继续堆就会变屎山”的前兆。
+
+所以当前整理策略是：
+- 不搞大爆炸重构
+- 先拆最容易继续膨胀的块
+- 先写清约定
+- 先把高频坑点固化进 README
+- 让后续每次改动都更可控
+
+如果后面继续整理，优先级建议仍然是：
+
+1. `host_env` 继续稳住
+2. 拆 `oled_config`
+3. 拆 `display_runtime`
+4. 继续把页面内重复逻辑往 `features/` 收
+
+---
+
+如果你是现在要直接开始干活的人，先记住四句话：
+
+- **HomeTab 看状态，DeployTab 做动作**
+- **UI 里的 PCLK 是 kHz，文件里的 PCLK 是 Hz**
+- **本地 BMP 每次都重新 push，再 fbShowBmp**
+- **别再用 PowerShell 批量替换源码**

@@ -1,5 +1,8 @@
+mod host_env;
+
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use host_env::get_local_network_info;
 #[cfg(feature = "ssh")]
 use ssh2::Session;
 #[cfg(feature = "ssh")]
@@ -1695,6 +1698,27 @@ fn display_remote_image(remote_image_path: String, state: tauri::State<Mutex<Con
         };
     }
 
+    if remote_image_path.to_ascii_lowercase().ends_with(".bmp") {
+        let command = format!("./vismm/fbshow/fbShowBmp {}", shell_quote(&remote_image_path));
+        return match adb_shell_internal(&state, &command) {
+            Ok(result) if result.success => PatternResult {
+                success: true,
+                message: format!("已显示 BMP: {}", remote_image_path),
+                error: None,
+            },
+            Ok(result) => PatternResult {
+                success: false,
+                message: result.output,
+                error: result.error.or(Some("fbShowBmp 执行失败".to_string())),
+            },
+            Err(error) => PatternResult {
+                success: false,
+                message: String::new(),
+                error: Some(error),
+            },
+        };
+    }
+
     run_remote_python_script(
         &state,
         &project_file("python/fb_image_display.py"),
@@ -1725,15 +1749,28 @@ fn display_image(request: ImageDisplayRequest, state: tauri::State<Mutex<Connect
         Path::new(&request.image_path)
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("input_image.png")
+            .unwrap_or("input_image.bmp")
             .to_string()
     });
     let safe_remote_name: String = remote_name
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
         .collect();
-    let remote_image = format!("/data/local/tmp/big8k_images/{}", safe_remote_name);
-    let _ = adb_shell_internal(&state, "mkdir -p /data/local/tmp/big8k_images");
+    let is_bmp = Path::new(&request.image_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("bmp"))
+        .unwrap_or(false);
+    let remote_image = if is_bmp {
+        format!("/vismm/fbshow/bmp_online/{}", safe_remote_name)
+    } else {
+        format!("/data/local/tmp/big8k_images/{}", safe_remote_name)
+    };
+    let _ = if is_bmp {
+        adb_shell_internal(&state, "mkdir -p /vismm/fbshow/bmp_online")
+    } else {
+        adb_shell_internal(&state, "mkdir -p /data/local/tmp/big8k_images")
+    };
     match adb_push_internal(&state, &request.image_path, &remote_image) {
         Ok(push_result) if push_result.success => {}
         Ok(push_result) => {
@@ -1750,6 +1787,27 @@ fn display_image(request: ImageDisplayRequest, state: tauri::State<Mutex<Connect
                 error: Some(error),
             }
         }
+    }
+
+    if is_bmp {
+        let command = format!("./vismm/fbshow/fbShowBmp {}", shell_quote(&remote_image));
+        return match adb_shell_internal(&state, &command) {
+            Ok(result) if result.success => PatternResult {
+                success: true,
+                message: format!("已显示 BMP: {}", safe_remote_name),
+                error: None,
+            },
+            Ok(result) => PatternResult {
+                success: false,
+                message: result.output,
+                error: result.error.or(Some("fbShowBmp 执行失败".to_string())),
+            },
+            Err(error) => PatternResult {
+                success: false,
+                message: String::new(),
+                error: Some(error),
+            },
+        };
     }
 
     run_remote_python_script(
@@ -1895,7 +1953,12 @@ fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String
         return Err(format!("点屏配置文件长度不足，至少需要 200 字节，实际 {} 字节", bytes.len()));
     }
 
-    let pclk = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as u64;
+    let raw_pclk_hz = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as u64;
+    let pclk = if raw_pclk_hz >= 1_000_000 {
+        raw_pclk_hz / 1000
+    } else {
+        raw_pclk_hz
+    };
     let hact = u16::from_be_bytes([bytes[5], bytes[6]]) as u32;
     let vact = u16::from_be_bytes([bytes[7], bytes[8]]) as u32;
     let hbp = u16::from_be_bytes([bytes[9], bytes[10]]) as u32;
@@ -2006,17 +2069,69 @@ fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String
     })
 }
 
+fn parse_oled_config_json_file(path: &str) -> Result<LegacyLcdConfigResult, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("读取 OLED 配置 JSON 失败: {}", e))?;
+    let request: TimingBinRequest = serde_json::from_str(&raw).map_err(|e| format!("解析 OLED 配置 JSON 失败: {}", e))?;
+
+    Ok(LegacyLcdConfigResult {
+        success: true,
+        path: Some(path.to_string()),
+        timing: Some(LegacyTimingConfig {
+            hact: request.hact,
+            vact: request.vact,
+            pclk: request.pclk,
+            hfp: request.hfp,
+            hbp: request.hbp,
+            hsync: request.hsync,
+            vfp: request.vfp,
+            vbp: request.vbp,
+            vsync: request.vsync,
+            hs_polarity: request.hs_polarity,
+            vs_polarity: request.vs_polarity,
+            de_polarity: request.de_polarity,
+            clk_polarity: request.clk_polarity,
+            interface_type: request.interface_type,
+            mipi_mode: request.mipi_mode,
+            video_type: request.video_type,
+            lanes: request.lanes,
+            format: request.format,
+            phy_mode: request.phy_mode,
+            dsc_enable: request.dsc_enable,
+            dsc_version: request.dsc_version,
+            slice_width: request.slice_width,
+            slice_height: request.slice_height,
+            scrambling_enable: request.scrambling_enable,
+            data_swap: request.data_swap,
+            dual_channel: false,
+        }),
+        init_codes: request.init_codes,
+        error: None,
+    })
+}
+
 #[tauri::command]
 fn pick_lcd_config_file() -> Option<String> {
     rfd::FileDialog::new()
-        .add_filter("LCD config", &["bin"])
+        .add_filter("LCD config", &["bin", "json"])
         .pick_file()
         .map(|p| p.to_string_lossy().to_string())
 }
 
 #[tauri::command]
 fn parse_legacy_lcd_bin(path: String) -> LegacyLcdConfigResult {
-    match parse_legacy_lcd_bin_file(&path) {
+    let extension = Path::new(&path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let parsed = if extension == "json" {
+        parse_oled_config_json_file(&path)
+    } else {
+        parse_legacy_lcd_bin_file(&path)
+    };
+
+    match parsed {
         Ok(result) => result,
         Err(err) => LegacyLcdConfigResult {
             success: false,
@@ -2097,7 +2212,8 @@ fn generate_timing_bin(request: TimingBinRequest) -> GenericResult {
         out.push(0);
     }
 
-    out.extend_from_slice(&request.pclk.to_le_bytes());
+    let pclk_hz = if request.pclk >= 1_000_000 { request.pclk } else { request.pclk.saturating_mul(1000) };
+    out.extend_from_slice(&pclk_hz.to_le_bytes());
     out.extend_from_slice(&request.hact.to_le_bytes());
     out.extend_from_slice(&request.hfp.to_le_bytes());
     out.extend_from_slice(&request.hbp.to_le_bytes());
@@ -2267,7 +2383,12 @@ fn export_oled_config_json(payload: ExportOledConfigJsonRequest) -> GenericResul
         }
     };
 
-    let json = match serde_json::to_string_pretty(&payload.request) {
+    let mut export_request = payload.request;
+    if export_request.pclk < 1_000_000 {
+        export_request.pclk = export_request.pclk.saturating_mul(1000);
+    }
+
+    let json = match serde_json::to_string_pretty(&export_request) {
         Ok(json) => json,
         Err(err) => {
             return GenericResult {
@@ -2441,51 +2562,6 @@ fn adb_push_path(state: &tauri::State<Mutex<ConnectionState>>, local: &Path, rem
     adb_push_internal(state, &local_path, remote)
 }
 
-#[tauri::command]
-fn get_local_network_info() -> GenericResult {
-    #[cfg(target_os = "windows")]
-    {
-        let output = Command::new("cmd")
-            .args(["/C", "chcp 65001>nul & ipconfig"])
-            .output();
-        match output {
-            Ok(result) => {
-                let stdout = String::from_utf8_lossy(&result.stdout).to_string();
-                if result.status.success() {
-                    GenericResult { success: true, output: stdout, error: None }
-                } else {
-                    GenericResult {
-                        success: false,
-                        output: stdout,
-                        error: Some("读取本机网络信息失败".to_string()),
-                    }
-                }
-            }
-            Err(error) => GenericResult { success: false, output: String::new(), error: Some(format!("读取本机网络信息异常: {}", error)) },
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let output = Command::new("sh").args(["-lc", "ip addr || ifconfig"]).output();
-        match output {
-            Ok(result) => {
-                let stdout = String::from_utf8_lossy(&result.stdout).to_string();
-                if result.status.success() {
-                    GenericResult { success: true, output: stdout, error: None }
-                } else {
-                    let stderr = String::from_utf8_lossy(&result.stderr).to_string();
-                    GenericResult {
-                        success: false,
-                        output: stdout,
-                        error: Some(if stderr.trim().is_empty() { "读取本机网络信息失败".to_string() } else { stderr }),
-                    }
-                }
-            }
-            Err(error) => GenericResult { success: false, output: String::new(), error: Some(format!("读取本机网络信息异常: {}", error)) },
-        }
-    }
-}
 
 fn ensure_remote_dirs(state: &tauri::State<Mutex<ConnectionState>>, dirs: &[&str]) -> Result<(), String> {
     if dirs.is_empty() {
