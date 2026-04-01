@@ -9,15 +9,11 @@ import {
   FolderOpen,
   Search,
   Check,
-  Settings2,
-  Play,
   FolderTree,
-  Trash2,
-  FileCode,
   Video,
-  Square,
 } from "lucide-react";
 import { useConnection } from "../App";
+import { WorkspaceFilePanel } from "../features/framebuffer/WorkspaceFilePanel";
 import { tauriInvoke } from "../utils/tauri";
 
 interface PatternResult {
@@ -1037,186 +1033,38 @@ export default function FramebufferTab() {
             </div>
           </div>
 
-          {/* 文件工作区 */}
-          <div className="panel">
-            <div className="panel-header flex items-center gap-2">
-              <FolderOpen className="w-4 h-4" />
-              文件 / 脚本工作区
-            </div>
-            <div className="panel-body space-y-4">
-              {/* 文件类型切换 */}
-              <div className="flex gap-2">
-                {(["script", "image", "video"] as FileType[]).map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => handleFileTypeChange(type)}
-                    className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-                      fileType === type
-                        ? "border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300"
-                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 hover:border-gray-300 dark:hover:border-gray-600"
-                    }`}
-                  >
-                    {FILE_TYPE_CONFIG[type].label}
-                  </button>
-                ))}
-              </div>
-
-              {/* 路径和选中文件 */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">远程路径</label>
-                  <input
-                    value={remotePath}
-                    onChange={(e) => setRemotePath(e.target.value)}
-                    className="input text-sm"
-                    placeholder="/vismm/fbshow/"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">选中文件</label>
-                  <input
-                    value={selectedFileInput}
-                    onChange={(e) => setSelectedFileInput(e.target.value)}
-                    className="input text-sm"
-                    placeholder="从下方列表选择或手动输入"
-                    readOnly
-                  />
-                </div>
-              </div>
-
-              {/* 文件列表 */}
-              <div>
-                <div className="space-y-2 mb-2">
-                  <label className="block text-xs text-gray-500 dark:text-gray-400">
-                    文件列表 ({remoteFileList.length} 个{FILE_TYPE_CONFIG[fileType].label}文件)
-                  </label>
-                  <button
-                    onClick={() => void handleListRemoteFiles()}
-                    disabled={!isConnected || isLoadingFiles}
-                    className="inline-flex min-w-[160px] items-center justify-center gap-2 rounded-xl border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20 px-4 py-2.5 text-sm font-medium text-primary-700 dark:text-primary-300 transition-colors hover:bg-primary-100 dark:hover:bg-primary-900/30 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {isLoadingFiles ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <FolderTree className="w-4 h-4" />
-                    )}
-                    查看目录
-                  </button>
-                </div>
-                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 max-h-[240px] overflow-auto">
-                  {remoteFileList.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-sm text-gray-400">
-                      点击"查看目录"加载文件列表
-                    </div>
-                  ) : (
-                    <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-                      {remoteFileList.map((file, index) => (
-                        <li key={`${file}-${index}`}>
-                          <button
-                            onClick={() => setSelectedFileInput(file)}
-                            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors flex items-center gap-2 ${
-                              selectedFileInput === file ? "bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300" : ""
-                            }`}
-                          >
-                            {fileType === "script" && <FileCode className="w-4 h-4 text-gray-400" />}
-                            {fileType === "image" && <Image className="w-4 h-4 text-gray-400" />}
-                            {fileType === "video" && <Video className="w-4 h-4 text-gray-400" />}
-                            <span className="truncate">{file}</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-
-              {isVideoWorkspaceActive ? (
-                <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 px-4 py-4 space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">视频控制</div>
-                      <div className="text-xs text-gray-500 dark:text-gray-400">选择视频文件后，可执行播放 / 暂停 / 停止。</div>
-                    </div>
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full ${videoControlStatus === "playing" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : videoControlStatus === "paused" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>
-                      {isCheckingVideoPlayback ? "检测中" : videoControlStatus === "playing" ? "播放中" : videoControlStatus === "paused" ? "已暂停" : "未开始"}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-[180px_minmax(0,1fr)] gap-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/20 px-3 py-3">
-                    <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">缩放</label>
-                      <select value={videoZoomMode} onChange={(e) => setVideoZoomMode(Number(e.target.value) as 0 | 1 | 2)} className="input text-sm">
-                        <option value={0}>原始大小</option>
-                        <option value={1}>适应屏幕</option>
-                        <option value={2}>填充屏幕</option>
-                      </select>
-                    </div>
-                    <div className="flex items-end">
-                      <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-                        <input type="checkbox" checked={showVideoFramerate} onChange={(e) => setShowVideoFramerate(e.target.checked)} />
-                        显示分辨率 / 帧率信息
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <button onClick={() => handleVideoWorkspaceControl("play")} disabled={!canVideoPlay} className="rounded-xl border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-green-100 dark:hover:bg-green-900/30 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                      <Play className="w-4 h-4" />
-                      播放
-                    </button>
-                    <button onClick={() => handleVideoWorkspaceControl("pause")} disabled={!canVideoPause} className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-amber-100 dark:hover:bg-amber-900/30 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                      <Square className="w-4 h-4" />
-                      暂停
-                    </button>
-                    <button onClick={() => handleVideoWorkspaceControl("stop")} disabled={!canVideoStop} className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-red-100 dark:hover:bg-red-900/30 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                      <Square className="w-4 h-4" />
-                      停止
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-
-              {/* 操作按钮 */}
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => void handleUploadFile()}
-                  disabled={!isConnected || isUploading}
-                  className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-2.5 text-sm font-medium transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  上传文件
-                </button>
-                {isScriptWorkspaceActive ? (
-                  <button
-                    onClick={() => void handleRunScript()}
-                    disabled={!isConnected || !hasWorkspaceSelection || !isScriptWorkspaceActive || isScriptRunning}
-                    className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-2.5 text-sm font-medium transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  >
-                    <Play className="w-4 h-4" />
-                    运行脚本
-                  </button>
-                ) : null}
-                <button
-                  onClick={() => void handleDeleteFile()}
-                  disabled={!isConnected || !hasWorkspaceSelection}
-                  className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-red-100 dark:hover:bg-red-900/30 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  删除文件
-                </button>
-                {isScriptWorkspaceActive ? (
-                  <button
-                    onClick={() => void handleSetAutorun()}
-                    disabled={!isConnected || !hasWorkspaceSelection || !isScriptWorkspaceActive}
-                    className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-2.5 text-sm font-medium transition-colors hover:border-primary-300 dark:hover:border-primary-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  >
-                    <Settings2 className="w-4 h-4" />
-                    设置开机运行
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </div>
+          <WorkspaceFilePanel
+            isConnected={isConnected}
+            fileType={fileType}
+            onFileTypeChange={handleFileTypeChange}
+            remotePath={remotePath}
+            onRemotePathChange={setRemotePath}
+            selectedFileInput={selectedFileInput}
+            onSelectedFileInputChange={setSelectedFileInput}
+            remoteFileList={remoteFileList}
+            onSelectRemoteFile={setSelectedFileInput}
+            isLoadingFiles={isLoadingFiles}
+            onLoadFiles={() => void handleListRemoteFiles()}
+            isUploading={isUploading}
+            onUploadFile={() => void handleUploadFile()}
+            isScriptWorkspaceActive={isScriptWorkspaceActive}
+            isVideoWorkspaceActive={isVideoWorkspaceActive}
+            hasWorkspaceSelection={hasWorkspaceSelection}
+            isScriptRunning={isScriptRunning}
+            onRunScript={() => void handleRunScript()}
+            onDeleteFile={() => void handleDeleteFile()}
+            onSetAutorun={() => void handleSetAutorun()}
+            videoControlStatus={videoControlStatus}
+            isCheckingVideoPlayback={isCheckingVideoPlayback}
+            videoZoomMode={videoZoomMode}
+            showVideoFramerate={showVideoFramerate}
+            canVideoPlay={canVideoPlay}
+            canVideoPause={canVideoPause}
+            canVideoStop={canVideoStop}
+            onVideoZoomModeChange={setVideoZoomMode}
+            onShowVideoFramerateChange={setShowVideoFramerate}
+            onVideoAction={(action) => void handleVideoWorkspaceControl(action)}
+          />
         </div>
       )}
     </div>
