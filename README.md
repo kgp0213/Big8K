@@ -435,6 +435,18 @@ cargo run --features ssh --bin Big8K
 npm run tauri dev -- --features ssh
 ```
 
+如果只是验证是否能成功编译带 SSH 的桌面程序，可直接执行：
+
+```bash
+cd src-tauri
+cargo build --features ssh
+```
+
+已验证说明：
+- `ssh2 / libssh2` 依赖链可以正常进入编译
+- 在 Windows 上如果 `Big8K.exe` 正在运行，`cargo build --features ssh` 可能会因无法覆盖目标文件而失败：`拒绝访问。 (os error 5)`
+- 处理方式：先结束正在运行的 `Big8K.exe`，再重新执行 `cargo build --features ssh`
+
 如果未启用 SSH feature：
 - 程序能正常启动
 - ADB 相关能力不受影响

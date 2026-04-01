@@ -1,8 +1,18 @@
+mod display_runtime;
 mod host_env;
+mod oled_config;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use display_runtime::{
+    display_image, display_image_from_base64, display_remote_image, get_video_playback_status,
+    play_video, run_runtime_pattern, send_video_control, sync_runtime_patterns,
+};
 use host_env::get_local_network_info;
+use oled_config::{
+    download_oled_config_and_reboot, export_oled_config_json, generate_timing_bin,
+    parse_legacy_lcd_bin, pick_lcd_config_file,
+};
 #[cfg(feature = "ssh")]
 use ssh2::Session;
 #[cfg(feature = "ssh")]
@@ -165,23 +175,23 @@ struct SetupLoopImagesRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct PlayVideoRequest {
-    video_path: String,
-    zoom_mode: i32,
-    show_framerate: i32,
+pub struct PlayVideoRequest {
+    pub video_path: String,
+    pub zoom_mode: i32,
+    pub show_framerate: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct VideoControlRequest {
-    action: String,
+pub struct VideoControlRequest {
+    pub action: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct VideoPlaybackStatus {
-    success: bool,
-    is_running: bool,
-    output: String,
-    error: Option<String>,
+pub struct VideoPlaybackStatus {
+    pub success: bool,
+    pub is_running: bool,
+    pub output: String,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -347,7 +357,7 @@ fn run_adb(args: &[&str]) -> Result<std::process::Output, String> {
         .map_err(|e| format!("执行 adb 失败: {}。请确认 adb 已安装并加入 PATH", e))
 }
 
-fn run_adb_nowait(args: &[&str]) -> Result<(), String> {
+pub(crate) fn run_adb_nowait(args: &[&str]) -> Result<(), String> {
     let mut command = Command::new("adb");
     command.args(args);
     command.stdout(Stdio::null()).stderr(Stdio::null());
@@ -427,7 +437,7 @@ fn query_adb_devices() -> AdbDevicesResult {
     }
 }
 
-fn resolve_device_id(state: &tauri::State<Mutex<ConnectionState>>) -> Result<String, String> {
+pub(crate) fn resolve_device_id(state: &tauri::State<Mutex<ConnectionState>>) -> Result<String, String> {
     let selected_device = {
         let guard = state
             .lock()
@@ -454,7 +464,7 @@ fn resolve_device_id(state: &tauri::State<Mutex<ConnectionState>>) -> Result<Str
     Ok(devices[0].id.clone())
 }
 
-fn adb_shell_internal(
+pub(crate) fn adb_shell_internal(
     state: &tauri::State<Mutex<ConnectionState>>,
     command: &str,
 ) -> Result<AdbActionResult, String> {
@@ -486,7 +496,7 @@ fn adb_shell_internal(
     }
 }
 
-fn adb_push_internal(
+pub(crate) fn adb_push_internal(
     state: &tauri::State<Mutex<ConnectionState>>,
     local_path: &str,
     remote_path: &str,
@@ -579,7 +589,7 @@ fn set_static_ip_internal(
     }
 }
 
-fn run_remote_python_script(
+pub(crate) fn run_remote_python_script(
     state: &tauri::State<Mutex<ConnectionState>>,
     local_script_path: &str,
     remote_script_path: &str,
@@ -628,7 +638,7 @@ fn run_remote_python_script(
     }
 }
 
-fn shell_quote(value: &str) -> String {
+pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "'\"'\"'"))
 }
 
@@ -639,7 +649,7 @@ fn project_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
-fn project_file(path: &str) -> String {
+pub(crate) fn project_file(path: &str) -> String {
     project_root().join(path).to_string_lossy().to_string()
 }
 
@@ -1306,74 +1316,6 @@ print('OK')"#,
     }
 }
 
-#[tauri::command]
-fn sync_runtime_patterns(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
-    let remote_dir = "/vismm/fbshow/big8k_runtime";
-    match adb_shell_internal(&state, &format!("mkdir -p {}", remote_dir)) {
-        Ok(result) if !result.success => {
-            return PatternResult { success: false, message: result.output, error: result.error };
-        }
-        Err(error) => {
-            return PatternResult { success: false, message: String::new(), error: Some(error) };
-        }
-        _ => {}
-    }
-
-    match adb_push_internal(&state, &project_file("python/runtime_fbshow/render_patterns.py"), "/vismm/fbshow/big8k_runtime/render_patterns.py") {
-        Ok(result) if result.success => {}
-        Ok(result) => {
-            return PatternResult { success: false, message: result.output, error: result.error };
-        }
-        Err(error) => {
-            return PatternResult { success: false, message: String::new(), error: Some(error) };
-        }
-    }
-
-    let _ = adb_shell_internal(&state, "chmod 755 /vismm/fbshow/big8k_runtime/render_patterns.py");
-    PatternResult {
-        success: true,
-        message: "已同步画面脚本到 /vismm/fbshow/big8k_runtime".to_string(),
-        error: None,
-    }
-}
-
-#[tauri::command]
-fn run_runtime_pattern(request: RuntimePatternRequest, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
-    let command = format!("python3 /vismm/fbshow/big8k_runtime/render_patterns.py {}", shell_quote(&request.pattern));
-    match adb_shell_internal(&state, &command) {
-        Ok(result) => {
-            // adb shell 本身可能返回成功，但 Python 脚本可能失败
-            // 检查输出中是否包含错误信息
-            let output = result.output.to_lowercase();
-            let has_error = output.contains("error") 
-                || output.contains("no such file") 
-                || output.contains("not found")
-                || output.contains("cannot")
-                || output.contains("traceback")
-                || result.error.is_some();
-            
-            if result.success && !has_error {
-                PatternResult {
-                    success: true,
-                    message: format!("已显示画面 {}", request.pattern),
-                    error: None,
-                }
-            } else {
-                PatternResult {
-                    success: false,
-                    message: result.output.clone(),
-                    error: result.error.or(Some(result.output)),
-                }
-            }
-        }
-        Err(error) => PatternResult {
-            success: false,
-            message: String::new(),
-            error: Some(error),
-        },
-    }
-}
-
 #[cfg(feature = "image-tools")]
 #[tauri::command]
 fn pick_image_directory() -> Option<String> {
@@ -1665,159 +1607,6 @@ fn display_text(request: TextDisplayRequest, state: tauri::State<Mutex<Connectio
     )
 }
 
-#[tauri::command]
-fn display_image_from_base64(request: ImageDisplayFromBase64Request, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
-    let filename = if request.filename.trim().is_empty() {
-        "input_image.bin".to_string()
-    } else {
-        request.filename.trim().to_string()
-    };
-    let temp_dir = std::env::temp_dir();
-    let local_path = temp_dir.join(&filename);
-    let decoded = match base64::engine::general_purpose::STANDARD.decode(request.base64_data.as_bytes()) {
-        Ok(data) => data,
-        Err(err) => {
-            return PatternResult { success: false, message: String::new(), error: Some(format!("Base64 解码失败: {}", err)) }
-        }
-    };
-    if let Err(err) = std::fs::write(&local_path, decoded) {
-        return PatternResult { success: false, message: String::new(), error: Some(format!("写入临时图片失败: {}", err)) };
-    }
-    let result = display_image(ImageDisplayRequest { image_path: local_path.to_string_lossy().to_string(), remote_name: request.remote_name.clone() }, state);
-    let _ = std::fs::remove_file(local_path);
-    result
-}
-
-#[tauri::command]
-fn display_remote_image(remote_image_path: String, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
-    if remote_image_path.trim().is_empty() {
-        return PatternResult {
-            success: false,
-            message: String::new(),
-            error: Some("远程图片路径不能为空".to_string()),
-        };
-    }
-
-    if remote_image_path.to_ascii_lowercase().ends_with(".bmp") {
-        let command = format!("./vismm/fbshow/fbShowBmp {}", shell_quote(&remote_image_path));
-        return match adb_shell_internal(&state, &command) {
-            Ok(result) if result.success => PatternResult {
-                success: true,
-                message: format!("已显示 BMP: {}", remote_image_path),
-                error: None,
-            },
-            Ok(result) => PatternResult {
-                success: false,
-                message: result.output,
-                error: result.error.or(Some("fbShowBmp 执行失败".to_string())),
-            },
-            Err(error) => PatternResult {
-                success: false,
-                message: String::new(),
-                error: Some(error),
-            },
-        };
-    }
-
-    run_remote_python_script(
-        &state,
-        &project_file("python/fb_image_display.py"),
-        "/data/local/tmp/fb_image_display.py",
-        &[&remote_image_path],
-    )
-}
-
-#[tauri::command]
-fn display_image(request: ImageDisplayRequest, state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
-    if request.image_path.trim().is_empty() {
-        return PatternResult {
-            success: false,
-            message: String::new(),
-            error: Some("图片路径不能为空".to_string()),
-        };
-    }
-
-    if !Path::new(&request.image_path).exists() {
-        return PatternResult {
-            success: false,
-            message: String::new(),
-            error: Some(format!("图片不存在: {}", request.image_path)),
-        };
-    }
-
-    let remote_name = request.remote_name.clone().unwrap_or_else(|| {
-        Path::new(&request.image_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("input_image.bmp")
-            .to_string()
-    });
-    let safe_remote_name: String = remote_name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
-        .collect();
-    let is_bmp = Path::new(&request.image_path)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("bmp"))
-        .unwrap_or(false);
-    let remote_image = if is_bmp {
-        format!("/vismm/fbshow/bmp_online/{}", safe_remote_name)
-    } else {
-        format!("/data/local/tmp/big8k_images/{}", safe_remote_name)
-    };
-    let _ = if is_bmp {
-        adb_shell_internal(&state, "mkdir -p /vismm/fbshow/bmp_online")
-    } else {
-        adb_shell_internal(&state, "mkdir -p /data/local/tmp/big8k_images")
-    };
-    match adb_push_internal(&state, &request.image_path, &remote_image) {
-        Ok(push_result) if push_result.success => {}
-        Ok(push_result) => {
-            return PatternResult {
-                success: false,
-                message: push_result.output,
-                error: push_result.error.or(Some("图片上传失败".to_string())),
-            }
-        }
-        Err(error) => {
-            return PatternResult {
-                success: false,
-                message: String::new(),
-                error: Some(error),
-            }
-        }
-    }
-
-    if is_bmp {
-        let command = format!("./vismm/fbshow/fbShowBmp {}", shell_quote(&remote_image));
-        return match adb_shell_internal(&state, &command) {
-            Ok(result) if result.success => PatternResult {
-                success: true,
-                message: format!("已显示 BMP: {}", safe_remote_name),
-                error: None,
-            },
-            Ok(result) => PatternResult {
-                success: false,
-                message: result.output,
-                error: result.error.or(Some("fbShowBmp 执行失败".to_string())),
-            },
-            Err(error) => PatternResult {
-                success: false,
-                message: String::new(),
-                error: Some(error),
-            },
-        };
-    }
-
-    run_remote_python_script(
-        &state,
-        &project_file("python/fb_image_display.py"),
-        "/data/local/tmp/fb_image_display.py",
-        &[&remote_image],
-    )
-}
-
 // MIPI 下发统一走 vismpwr。
 // 新 UI 不再沿用旧 C# 上位机里“先读 RK3588 固件版本号，再分支选择不同下发方式”的兼容逻辑。
 // 前端传入的标准格式指令会直接拼成 vismpwr 命令，通过 adb shell 执行。
@@ -1929,360 +1718,6 @@ fn clear_screen(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
     display_solid_color("black".to_string(), state)
 }
 
-fn write_entry(buffer: &mut Vec<u8>, offset: u32, length: u32) {
-    buffer.extend_from_slice(&offset.to_le_bytes());
-    buffer.extend_from_slice(&length.to_le_bytes());
-}
-
-fn align(size: usize, alignment: usize) -> usize {
-    (size + alignment - 1) & !(alignment - 1)
-}
-
-fn parse_hex_csv_line(line: &str) -> Result<Vec<u8>, String> {
-    let bytes: Result<Vec<u8>, String> = line
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|part| !part.trim().is_empty())
-        .map(|part| u8::from_str_radix(part.trim(), 16).map_err(|_| format!("初始化代码字节解析失败: {}", part.trim())))
-        .collect();
-    bytes
-}
-
-fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("读取点屏配置失败: {}", e))?;
-    if bytes.len() < 200 {
-        return Err(format!("点屏配置文件长度不足，至少需要 200 字节，实际 {} 字节", bytes.len()));
-    }
-
-    let raw_pclk_hz = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as u64;
-    let pclk = if raw_pclk_hz >= 1_000_000 {
-        raw_pclk_hz / 1000
-    } else {
-        raw_pclk_hz
-    };
-    let hact = u16::from_be_bytes([bytes[5], bytes[6]]) as u32;
-    let vact = u16::from_be_bytes([bytes[7], bytes[8]]) as u32;
-    let hbp = u16::from_be_bytes([bytes[9], bytes[10]]) as u32;
-    let vbp = u16::from_be_bytes([bytes[11], bytes[12]]) as u32;
-    let hfp = u16::from_be_bytes([bytes[13], bytes[14]]) as u32;
-    let vfp = u16::from_be_bytes([bytes[15], bytes[16]]) as u32;
-    let hsync = u16::from_be_bytes([bytes[17], bytes[18]]) as u32;
-    let vsync = u16::from_be_bytes([bytes[19], bytes[20]]) as u32;
-
-    let hs_polarity = bytes[21] != 0;
-    let vs_polarity = bytes[22] != 0;
-    let de_polarity = bytes[23] != 0;
-    let clk_polarity = bytes[24] != 0;
-
-    let lanes = bytes[27];
-    let interface_type = match bytes[30] {
-        1 => "EDP",
-        2 => "DP",
-        _ => "MIPI",
-    }
-    .to_string();
-    let mipi_mode = match bytes[31] {
-        1 => "Command",
-        _ => "Video",
-    }
-    .to_string();
-    let video_type = match bytes[32] {
-        0 => "BURST_MODE",
-        1 => "NON_BURST_SYNC_PULSES",
-        _ => "NON_BURST_SYNC_EVENTS",
-    }
-    .to_string();
-    let format = match bytes[33] {
-        0 => "RGB888",
-        1 => "RGB666",
-        2 => "RGB666_PACKED",
-        3 => "RGB565",
-        _ => "RGB888",
-    }
-    .to_string();
-    let phy_mode = if bytes[34] == 1 { "CPHY" } else { "DPHY" }.to_string();
-    let dsc_enable = bytes[35] != 0;
-    let scrambling_enable = bytes[36] != 0;
-    let data_swap = bytes[37] != 0;
-    let dual_channel = bytes[38] != 0;
-    let slice_width = u16::from_be_bytes([bytes[39], bytes[40]]) as u32;
-    let slice_height = u16::from_be_bytes([bytes[41], bytes[42]]) as u32;
-    let dsc_version = if bytes[43] == 1 && bytes[44] == 2 {
-        "Vesa1.2"
-    } else {
-        "Ver1.1"
-    }
-    .to_string();
-
-    let mut init_codes = Vec::new();
-    let mut i = 200usize;
-    while i < bytes.len() {
-        if i + 2 >= bytes.len() {
-            break;
-        }
-        let payload_len = bytes[i + 2] as usize;
-        let line_len = payload_len + 3;
-        if i + line_len > bytes.len() {
-            return Err(format!("初始化代码区损坏：第 {} 字节开始的命令超出文件长度", i));
-        }
-        let line = bytes[i..i + line_len]
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<Vec<_>>()
-            .join(" ");
-        init_codes.push(line);
-        i += line_len;
-    }
-
-    Ok(LegacyLcdConfigResult {
-        success: true,
-        path: Some(path.to_string()),
-        timing: Some(LegacyTimingConfig {
-            hact,
-            vact,
-            pclk,
-            hfp,
-            hbp,
-            hsync,
-            vfp,
-            vbp,
-            vsync,
-            hs_polarity,
-            vs_polarity,
-            de_polarity,
-            clk_polarity,
-            interface_type,
-            mipi_mode,
-            video_type,
-            lanes,
-            format,
-            phy_mode,
-            dsc_enable,
-            dsc_version,
-            slice_width,
-            slice_height,
-            scrambling_enable,
-            data_swap,
-            dual_channel,
-        }),
-        init_codes,
-        error: None,
-    })
-}
-
-fn parse_oled_config_json_file(path: &str) -> Result<LegacyLcdConfigResult, String> {
-    let raw = std::fs::read_to_string(path).map_err(|e| format!("读取 OLED 配置 JSON 失败: {}", e))?;
-    let request: TimingBinRequest = serde_json::from_str(&raw).map_err(|e| format!("解析 OLED 配置 JSON 失败: {}", e))?;
-
-    Ok(LegacyLcdConfigResult {
-        success: true,
-        path: Some(path.to_string()),
-        timing: Some(LegacyTimingConfig {
-            hact: request.hact,
-            vact: request.vact,
-            pclk: request.pclk,
-            hfp: request.hfp,
-            hbp: request.hbp,
-            hsync: request.hsync,
-            vfp: request.vfp,
-            vbp: request.vbp,
-            vsync: request.vsync,
-            hs_polarity: request.hs_polarity,
-            vs_polarity: request.vs_polarity,
-            de_polarity: request.de_polarity,
-            clk_polarity: request.clk_polarity,
-            interface_type: request.interface_type,
-            mipi_mode: request.mipi_mode,
-            video_type: request.video_type,
-            lanes: request.lanes,
-            format: request.format,
-            phy_mode: request.phy_mode,
-            dsc_enable: request.dsc_enable,
-            dsc_version: request.dsc_version,
-            slice_width: request.slice_width,
-            slice_height: request.slice_height,
-            scrambling_enable: request.scrambling_enable,
-            data_swap: request.data_swap,
-            dual_channel: false,
-        }),
-        init_codes: request.init_codes,
-        error: None,
-    })
-}
-
-#[tauri::command]
-fn pick_lcd_config_file() -> Option<String> {
-    rfd::FileDialog::new()
-        .add_filter("LCD config", &["bin", "json"])
-        .pick_file()
-        .map(|p| p.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-fn parse_legacy_lcd_bin(path: String) -> LegacyLcdConfigResult {
-    let extension = Path::new(&path)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .unwrap_or_default();
-
-    let parsed = if extension == "json" {
-        parse_oled_config_json_file(&path)
-    } else {
-        parse_legacy_lcd_bin_file(&path)
-    };
-
-    match parsed {
-        Ok(result) => result,
-        Err(err) => LegacyLcdConfigResult {
-            success: false,
-            path: Some(path),
-            timing: None,
-            init_codes: Vec::new(),
-            error: Some(err),
-        },
-    }
-}
-
-#[tauri::command]
-fn generate_timing_bin(request: TimingBinRequest) -> GenericResult {
-    let exe = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(err) => {
-            return GenericResult { success: false, output: String::new(), error: Some(format!("无法定位程序目录: {}", err)) };
-        }
-    };
-    let dir = match exe.parent() {
-        Some(dir) => dir,
-        None => {
-            return GenericResult { success: false, output: String::new(), error: Some("无法定位程序目录".to_string()) };
-        }
-    };
-    let output_path = dir.join("vis-timing.bin");
-
-    let mut init_seq: Vec<u8> = Vec::new();
-    for line in request.init_codes.iter().filter(|line| !line.trim().is_empty()) {
-        match parse_hex_csv_line(line) {
-            Ok(bytes) => {
-                if bytes.len() < 3 {
-                    return GenericResult { success: false, output: String::new(), error: Some(format!("初始化代码长度不足(至少3字节): {}", line)) };
-                }
-                init_seq.extend_from_slice(&bytes);
-            }
-            Err(err) => {
-                return GenericResult { success: false, output: String::new(), error: Some(err) };
-            }
-        }
-    }
-
-    let header_size = 96usize;
-    let timing_size = 48usize;
-    let init_seq_size = init_seq.len();
-    let exit_seq: [u8; 8] = [0x05, 0x78, 0x01, 0x28, 0x05, 0x00, 0x01, 0x10];
-    let vesa_dsc_size = 16usize;
-    let other_info_size = 16usize;
-
-    let timing_offset = align(header_size, 16);
-    let init_seq_offset = timing_offset + timing_size;
-    let exit_seq_offset = init_seq_offset + init_seq_size;
-    let vesa_dsc_offset = exit_seq_offset + exit_seq.len();
-    let other_info_offset = vesa_dsc_offset + vesa_dsc_size;
-    let total_size = other_info_offset + other_info_size;
-
-    let mut out: Vec<u8> = Vec::with_capacity(total_size);
-    out.extend_from_slice(&0xA5A55A5Au32.to_le_bytes());
-    let mut panel_vendor = [0u8; 16];
-    panel_vendor[..16].copy_from_slice(b"Visonox890123456");
-    out.extend_from_slice(&panel_vendor);
-    let mut panel_name = [0u8; 16];
-    panel_name[..16].copy_from_slice(b"DSI-Panel0123456");
-    out.extend_from_slice(&panel_name);
-    let mut version = [0u8; 8];
-    version.copy_from_slice(b"1.234567");
-    out.extend_from_slice(&version);
-
-    write_entry(&mut out, timing_offset as u32, timing_size as u32);
-    write_entry(&mut out, init_seq_offset as u32, init_seq_size as u32);
-    write_entry(&mut out, exit_seq_offset as u32, exit_seq.len() as u32);
-    write_entry(&mut out, 0, 0);
-    write_entry(&mut out, vesa_dsc_offset as u32, vesa_dsc_size as u32);
-    write_entry(&mut out, other_info_offset as u32, other_info_size as u32);
-    out.extend_from_slice(&(total_size as u32).to_le_bytes());
-
-    while out.len() < timing_offset {
-        out.push(0);
-    }
-
-    let pclk_hz = if request.pclk >= 1_000_000 { request.pclk } else { request.pclk.saturating_mul(1000) };
-    out.extend_from_slice(&pclk_hz.to_le_bytes());
-    out.extend_from_slice(&request.hact.to_le_bytes());
-    out.extend_from_slice(&request.hfp.to_le_bytes());
-    out.extend_from_slice(&request.hbp.to_le_bytes());
-    out.extend_from_slice(&request.hsync.to_le_bytes());
-    out.extend_from_slice(&request.vact.to_le_bytes());
-    out.extend_from_slice(&request.vfp.to_le_bytes());
-    out.extend_from_slice(&request.vbp.to_le_bytes());
-    out.extend_from_slice(&request.vsync.to_le_bytes());
-
-    let mut display_flags: u32 = 0;
-    display_flags |= if request.hs_polarity { 1 << 1 } else { 1 << 0 };
-    display_flags |= if request.vs_polarity { 1 << 3 } else { 1 << 2 };
-    display_flags |= if request.de_polarity { 1 << 5 } else { 1 << 4 };
-    display_flags |= if request.clk_polarity { 1 << 7 } else { 1 << 6 };
-    out.extend_from_slice(&display_flags.to_le_bytes());
-    out.extend_from_slice(&[0u8; 4]);
-
-    out.extend_from_slice(&init_seq);
-    out.extend_from_slice(&exit_seq);
-
-    let phy_mode = if request.phy_mode.eq_ignore_ascii_case("CPHY") { 1u8 } else { 0u8 };
-    let (ver_major, ver_minor) = if request.dsc_version.contains("1.2") { (1u8, 2u8) } else { (1u8, 1u8) };
-    out.push(phy_mode);
-    out.push(if request.scrambling_enable { 1 } else { 0 });
-    out.push(if request.dsc_enable { 1 } else { 0 });
-    out.push(ver_major);
-    out.push(ver_minor);
-    out.extend_from_slice(&[0u8; 3]);
-    out.extend_from_slice(&request.slice_width.to_le_bytes());
-    out.extend_from_slice(&request.slice_height.to_le_bytes());
-
-    let mut mipi_mode_video_type: u16 = 0;
-    if request.mipi_mode.eq_ignore_ascii_case("Video") {
-        mipi_mode_video_type |= 1 << 0;
-        if request.video_type.eq_ignore_ascii_case("NON_BURST_SYNC_PULSES") {
-            mipi_mode_video_type |= 1 << 2;
-        } else if request.video_type.eq_ignore_ascii_case("BURST_MODE") {
-            mipi_mode_video_type |= 1 << 1;
-        }
-    }
-    mipi_mode_video_type |= 1 << 11;
-    mipi_mode_video_type |= 1 << 9;
-    out.push((mipi_mode_video_type & 0xFF) as u8);
-    out.push(((mipi_mode_video_type >> 8) & 0xFF) as u8);
-    out.push(if request.data_swap { 1 } else { 0 });
-    let interface_type = match request.interface_type.as_str() {
-        "EDP" => 1u8,
-        "DP" => 2u8,
-        _ => 0u8,
-    };
-    out.push(interface_type);
-    let format_type = match request.format.as_str() {
-        "RGB888" => 0u8,
-        "RGB666" => 1u8,
-        "RGB666_PACKED" => 2u8,
-        "RGB565" => 3u8,
-        _ => 0u8,
-    };
-    out.push(format_type);
-    out.push(request.lanes);
-    out.push(phy_mode);
-    out.extend_from_slice(&[0x56, 0x69, 0x73]);
-    out.extend_from_slice(&[0u8; 6]);
-
-    match std::fs::write(&output_path, out) {
-        Ok(_) => GenericResult { success: true, output: output_path.to_string_lossy().to_string(), error: None },
-        Err(err) => GenericResult { success: false, output: String::new(), error: Some(format!("写入 timing bin 失败: {}", err)) },
-    }
-}
 
 // 命令清单存储路径：优先使用新文件名 command_presets.json，兼容旧文件 cmdx_list.json。
 fn command_preset_data_paths() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
@@ -2358,125 +1793,6 @@ fn save_cmdx_list(items: Vec<CommandPresetItem>) -> GenericResult {
             Err(err) => GenericResult { success: false, output: String::new(), error: Some(format!("写入命令清单失败: {}", err)) },
         },
         Err(err) => GenericResult { success: false, output: String::new(), error: Some(format!("序列化命令清单失败: {}", err)) },
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct ExportOledConfigJsonRequest {
-    request: TimingBinRequest,
-}
-
-#[tauri::command]
-fn export_oled_config_json(payload: ExportOledConfigJsonRequest) -> GenericResult {
-    let path = match rfd::FileDialog::new()
-        .add_filter("OLED config json", &["json"])
-        .set_file_name("oled-config.json")
-        .save_file()
-    {
-        Some(path) => path,
-        None => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some("已取消导出 OLED 配置 JSON".to_string()),
-            }
-        }
-    };
-
-    let mut export_request = payload.request;
-    if export_request.pclk < 1_000_000 {
-        export_request.pclk = export_request.pclk.saturating_mul(1000);
-    }
-
-    let json = match serde_json::to_string_pretty(&export_request) {
-        Ok(json) => json,
-        Err(err) => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("序列化 OLED 配置 JSON 失败: {}", err)),
-            }
-        }
-    };
-
-    if let Err(err) = std::fs::write(&path, json) {
-        return GenericResult {
-            success: false,
-            output: String::new(),
-            error: Some(format!("写入 OLED 配置 JSON 失败: {}", err)),
-        };
-    }
-
-    GenericResult {
-        success: true,
-        output: format!("已导出 OLED 配置 JSON: {}；vis-timing.bin 默认保存在程序目录", path.display()),
-        error: None,
-    }
-}
-
-#[tauri::command]
-fn download_oled_config_and_reboot(
-    payload: DownloadOledConfigRequest,
-    state: tauri::State<Mutex<ConnectionState>>,
-) -> GenericResult {
-    let generated = generate_timing_bin(payload.request);
-    if !generated.success {
-        return generated;
-    }
-
-    let local_path = generated.output.clone();
-    match adb_push_internal(&state, &local_path, "/vismm/vis-timing.bin") {
-        Ok(result) if result.success => {}
-        Ok(result) => {
-            return GenericResult {
-                success: false,
-                output: result.output,
-                error: result.error.or(Some("初始化配置下载失败：push 失败".to_string())),
-            };
-        }
-        Err(error) => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some(error),
-            };
-        }
-    }
-
-    match adb_shell_internal(&state, "/vismm/tools/repack_initrd.sh && sync") {
-        Ok(result) if result.success => {}
-        Ok(result) => {
-            return GenericResult {
-                success: false,
-                output: result.output,
-                error: result.error.or(Some("repack_initrd 执行失败".to_string())),
-            };
-        }
-        Err(error) => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some(error),
-            };
-        }
-    }
-
-    match adb_shell_internal(&state, "reboot") {
-        Ok(result) if result.success => GenericResult {
-            success: true,
-            output: format!("初始化配置下载完成并重启设备：{}", local_path),
-            error: None,
-        },
-        Ok(result) => GenericResult {
-            success: false,
-            output: result.output,
-            error: result.error.or(Some("重启命令执行失败".to_string())),
-        },
-        Err(error) => GenericResult {
-            success: false,
-            output: String::new(),
-            error: Some(error),
-        },
     }
 }
 
@@ -3433,110 +2749,6 @@ fn setup_loop_images(_request: SetupLoopImagesRequest, state: tauri::State<Mutex
             GenericResult { success: true, output: logs.join("\n"), error: None }
         }
         Err(error) => GenericResult { success: false, output: logs.join("\n"), error: Some(error) },
-    }
-}
-
-#[tauri::command]
-fn play_video(request: PlayVideoRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
-    let input_path = request.video_path.trim();
-    if input_path.is_empty() {
-        return GenericResult { success: false, output: String::new(), error: Some("视频路径不能为空".to_string()) };
-    }
-
-    let device_id = match resolve_device_id(&state) {
-        Ok(id) => id,
-        Err(error) => {
-            return GenericResult { success: false, output: String::new(), error: Some(error) };
-        }
-    };
-
-    let file_name = std::path::Path::new(input_path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.trim())
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| "视频文件名无效".to_string());
-
-    let file_name = match file_name {
-        Ok(name) => name,
-        Err(error) => {
-            return GenericResult { success: false, output: String::new(), error: Some(error) };
-        }
-    };
-
-    let remote_video_path = format!("/vismm/fbshow/movie_online/{}", file_name);
-    let zoom_mode = request.zoom_mode.to_string();
-    let show_framerate = request.show_framerate.to_string();
-
-    match run_adb_nowait(&[
-        "-s",
-        &device_id,
-        "shell",
-        "/usr/bin/python3",
-        "/vismm/fbshow/videoPlay.py",
-        &remote_video_path,
-        &zoom_mode,
-        &show_framerate,
-    ]) {
-        Ok(()) => GenericResult {
-            success: true,
-            output: format!("已后台启动视频播放: {} (zoom={}, framerate={})", remote_video_path, request.zoom_mode, request.show_framerate),
-            error: None,
-        },
-        Err(error) => GenericResult {
-            success: false,
-            output: String::new(),
-            error: Some(error),
-        },
-    }
-}
-
-#[tauri::command]
-fn get_video_playback_status(state: tauri::State<Mutex<ConnectionState>>) -> VideoPlaybackStatus {
-    match adb_shell_internal(&state, r#"if [ -f /dev/shm/is_running ]; then echo running; else echo stopped; fi"#) {
-        Ok(result) if result.success => {
-            let is_running = result.output.lines().any(|line| line.trim() == "running");
-            VideoPlaybackStatus {
-                success: true,
-                is_running,
-                output: result.output,
-                error: None,
-            }
-        }
-        Ok(result) => VideoPlaybackStatus {
-            success: false,
-            is_running: false,
-            output: result.output,
-            error: result.error.or(Some("获取视频播放状态失败".to_string())),
-        },
-        Err(error) => VideoPlaybackStatus {
-            success: false,
-            is_running: false,
-            output: String::new(),
-            error: Some(error),
-        },
-    }
-}
-
-#[tauri::command]
-fn send_video_control(request: VideoControlRequest, state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
-    let command = match request.action.as_str() {
-        "pause" => r#"echo > /dev/shm/pause_signal"#,
-        "resume" => r#"echo > /dev/shm/pause_signal"#,
-        "stop" => r#"echo > /dev/shm/stop_signal"#,
-        other => {
-            return GenericResult { success: false, output: String::new(), error: Some(format!("不支持的视频控制动作: {}", other)) };
-        }
-    };
-
-    match adb_shell_internal(&state, command) {
-        Ok(result) if result.success => GenericResult {
-            success: true,
-            output: if result.output.trim().is_empty() { format!("视频控制已发送: {}", request.action) } else { result.output },
-            error: None,
-        },
-        Ok(result) => GenericResult { success: false, output: result.output, error: result.error.or(Some("视频控制失败".to_string())) },
-        Err(error) => GenericResult { success: false, output: String::new(), error: Some(error) },
     }
 }
 
