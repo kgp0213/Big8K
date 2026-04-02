@@ -1950,6 +1950,69 @@ fn push_whl_and_install(state: &tauri::State<Mutex<ConnectionState>>, local_dir:
     Ok(logs)
 }
 
+fn ensure_i2c4_overlay_support(
+    state: &tauri::State<Mutex<ConnectionState>>,
+    dist_packages: &Path,
+    logs: &mut Vec<String>,
+) -> Result<(), String> {
+    let detected_uenv = run_shell_required(
+        state,
+        "if [ -f /boot/boot.cmd ] && grep -q '/uEnv/uEnv.txt' /boot/boot.cmd; then echo /boot/uEnv/uEnv.txt; else echo unknown; fi",
+    )?;
+    let detected_uenv = detected_uenv.trim();
+    if detected_uenv == "/boot/uEnv/uEnv.txt" {
+        logs.push("已验证 boot.cmd 当前从 /boot/uEnv/uEnv.txt 读取 overlay 配置".to_string());
+    } else {
+        logs.push(format!("未能明确验证实际生效 uEnv 文件，仍按 /boot/uEnv/uEnv.txt 处理（检测结果: {}）", detected_uenv));
+    }
+
+    let has_i2c4 = run_shell_required(state, "if ls /dev | grep -qx 'i2c-4'; then echo yes; else echo no; fi")?;
+    if has_i2c4.trim() == "yes" {
+        logs.push("检测到 /dev/i2c-4 已存在，跳过 i2c4-m2 保守修复".to_string());
+        return Ok(());
+    }
+    logs.push("未检测到 /dev/i2c-4，开始检查 i2c4-m2 overlay".to_string());
+
+    let has_overlay = run_shell_required(
+        state,
+        "if [ -f /boot/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo ]; then echo yes; else echo no; fi",
+    )?;
+    if has_overlay.trim() != "yes" {
+        let local_overlay = dist_packages.join("rk3588-i2c4-m2-overlay.dtbo");
+        if !local_overlay.exists() {
+            return Err(format!("缺少 i2c4-m2 overlay 资源文件: {}", local_overlay.display()));
+        }
+
+        let push_result = adb_push_path(state, &local_overlay, "/boot/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo")?;
+        if !push_result.success {
+            return Err(push_result.error.unwrap_or_else(|| "上传 rk3588-i2c4-m2-overlay.dtbo 失败".to_string()));
+        }
+        logs.push("已补齐 /boot/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo".to_string());
+    } else {
+        logs.push("目标板已存在 /boot/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo".to_string());
+    }
+
+    let overlay_line = "dtoverlay  =/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo";
+    let has_uenv_overlay = run_shell_required(
+        state,
+        "if grep -q '^dtoverlay[[:space:]]*=[[:space:]]*/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo$' /boot/uEnv/uEnv.txt; then echo yes; else echo no; fi",
+    )?;
+    if has_uenv_overlay.trim() == "yes" {
+        logs.push("/boot/uEnv/uEnv.txt 已启用 i2c4-m2 overlay".to_string());
+    } else {
+        run_shell_required(
+            state,
+            &format!(
+                "python3 - <<'PY'\nfrom pathlib import Path\npath = Path('/boot/uEnv/uEnv.txt')\nraw = path.read_bytes()\nnewline = b'\\r\\n' if b'\\r\\n' in raw else b'\\n'\ntext = raw.decode('utf-8')\nline = {overlay_line:?}\nneedle = '/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo'\nif needle not in text:\n    marker = '#overlay_end'\n    if marker in text:\n        text = text.replace(marker, line + ('\\r\\n' if newline == b'\\r\\n' else '\\n') + marker, 1)\n    else:\n        if not text.endswith(('\\n', '\\r\\n')):\n            text += '\\r\\n' if newline == b'\\r\\n' else '\\n'\n        text += line + ('\\r\\n' if newline == b'\\r\\n' else '\\n')\n    path.write_bytes(text.encode('utf-8'))\nPY"
+            ),
+        )?;
+        logs.push("已在 /boot/uEnv/uEnv.txt 中补充 i2c4-m2 overlay 配置".to_string());
+    }
+
+    logs.push("i2c4-m2 保守修复完成；如需生效，请手动重启设备".to_string());
+    Ok(())
+}
+
 #[tauri::command]
 fn deploy_install_tools(state: tauri::State<Mutex<ConnectionState>>) -> GenericResult {
     let dist_packages = match resolve_deploy_resource_dir("resources/deploy/dist-packages", Some("dist-packages")) {
@@ -2127,6 +2190,14 @@ fn deploy_install_tools(state: tauri::State<Mutex<ConnectionState>>) -> GenericR
                 error: Some(error),
             };
         }
+    }
+
+    if let Err(error) = ensure_i2c4_overlay_support(&state, &dist_packages, &mut logs) {
+        return GenericResult {
+            success: false,
+            output: logs.join("\n"),
+            error: Some(error),
+        };
     }
 
     GenericResult {

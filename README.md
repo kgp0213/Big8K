@@ -367,6 +367,35 @@ cmd /C chcp 65001>nul & ipconfig
 1. `cargo build`
 2. 重新拉起 exe
 
+### 7.9 install tools 里的 i2c4-m2 保守修复
+
+针对部分 `RK3588 boot.img` 版本缺少：
+
+- `/boot/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo`
+
+当前 `Install tools` 已额外带上一条保守修复链，只处理 `i2c4-m2`，**不改显示相关 overlay**。
+
+执行逻辑如下：
+
+1. 先检查 `/dev/i2c-4` 是否存在
+2. 如果已经存在：
+   - 直接跳过 `i2c4-m2` 修复
+3. 如果不存在：
+   - 检查 `/boot/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo` 是否存在
+   - 若缺失，则从资源区补推过去
+4. 再检查 `/boot/uEnv/uEnv.txt` 是否已启用：
+   - `dtoverlay  =/dtb/overlay/rk3588-i2c4-m2-overlay.dtbo`
+5. 若未启用：
+   - 仅对 `uEnv.txt` 做最小修改
+   - 保留原文件换行风格
+   - 不改显示相关 `dtoverlay`
+6. 修复完成后：
+   - 仅提示用户**手动重启**，不自动重启
+
+补充说明：
+- 当前板端验证表明，boot 流程从 `/boot/uEnv/uEnv.txt` 读取 overlay 配置，因此本修复只处理 `uEnv.txt`
+- 资源文件当前放在：`resources/deploy/dist-packages/rk3588-i2c4-m2-overlay.dtbo`
+
 这是当前项目约定，不再每次重复确认。
 
 ---
