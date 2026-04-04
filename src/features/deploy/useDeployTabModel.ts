@@ -2,7 +2,22 @@ import { useMemo, useState } from "react";
 import { useConnection } from "../../App";
 import { isTauri, tauriInvoke } from "../../utils/tauri";
 import type { ActionResult } from "../connection/types";
-import { deployActions, type DeployAction, type LocalNetworkInfo, type StaticIpPreset } from "./types";
+import { deployActions, type DeployAction, type HostNetworkCard, type LocalNetworkInfo, type StaticIpPreset } from "./types";
+
+function getNetworkCardLabel(card: HostNetworkCard) {
+  const normalized = card.name.toLowerCase();
+  const isWireless = normalized.includes("wi-fi")
+    || normalized.includes("wifi")
+    || normalized.includes("wlan")
+    || normalized.includes("wireless")
+    || card.name.includes("无线");
+
+  return isWireless ? "wlan" : "lan";
+}
+
+function buildNetworkLogLines(cards: HostNetworkCard[]) {
+  return cards.map((card) => `${getNetworkCardLabel(card)} IP：${card.ipv4}`);
+}
 
 export function useDeployTabModel() {
   const { connection, appendLog } = useConnection();
@@ -58,11 +73,18 @@ export function useDeployTabModel() {
       const result = await tauriInvoke<LocalNetworkInfo>("get_local_network_info");
       if (result.success) {
         setLocalNetworkInfo(result);
-        const message = result.cards.length > 0
-          ? `已读取本机 IP 地址，筛选出 ${result.cards.length} 个有线/无线网卡。`
+        const logLines = buildNetworkLogLines(result.cards);
+        const message = logLines.length > 0
+          ? logLines.join(" | ")
           : "已执行本机网络读取，但未发现符合条件的有线/无线 IPv4 网卡。";
         setLastActionMessage(message);
-        appendLog(message, result.cards.length > 0 ? "success" : "warning");
+        if (logLines.length > 0) {
+          for (const line of logLines) {
+            appendLog(line, "success");
+          }
+        } else {
+          appendLog(message, "warning");
+        }
       } else {
         setLocalNetworkInfo(result);
         setLastActionMessage(result.error || "读取本机 IP 地址失败");

@@ -1,5 +1,7 @@
+use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::collections::HashSet;
+use std::net::Ipv4Addr;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkCard {
@@ -14,321 +16,139 @@ pub struct LocalNetworkInfo {
     pub error: Option<String>,
 }
 
-#[cfg(target_os = "windows")]
-#[derive(Debug, Deserialize)]
-struct PowerShellNetworkAdapter {
-    #[serde(rename = "InterfaceAlias")]
-    interface_alias: Option<String>,
-    #[serde(rename = "IPv4Address")]
-    ipv4_address: Option<Vec<PowerShellIpv4Address>>,
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Debug, Deserialize)]
-struct PowerShellIpv4Address {
-    #[serde(rename = "IPAddress")]
-    ip_address: Option<String>,
-}
-
 #[tauri::command]
-pub fn get_local_network_info() -> LocalNetworkInfo {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(cards) = get_windows_network_cards_via_powershell() {
-            return LocalNetworkInfo {
+pub async fn get_local_network_info() -> LocalNetworkInfo {
+    tauri::async_runtime::spawn_blocking(get_local_network_info_blocking)
+        .await
+        .unwrap_or_else(|error| LocalNetworkInfo {
+            success: false,
+            cards: vec![],
+            error: Some(format!("读取本机网络信息异常: {}", error)),
+        })
+}
+
+fn get_local_network_info_blocking() -> LocalNetworkInfo {
+    match NetworkInterface::show() {
+        Ok(interfaces) => {
+            let mut cards = Vec::new();
+            let mut seen = HashSet::new();
+
+            for interface in interfaces {
+                let name = interface.name.trim().to_string();
+                if name.is_empty() || should_skip_adapter_name(&name) {
+                    continue;
+                }
+
+                for addr in interface.addr {
+                    let ipv4 = match addr {
+                        Addr::V4(value) => value.ip,
+                        Addr::V6(_) => continue,
+                    };
+
+                    if !should_include_ipv4(ipv4) || should_filter_adapter(&name, ipv4) {
+                        continue;
+                    }
+
+                    let key = format!("{}|{}", name, ipv4);
+                    if seen.insert(key) {
+                        cards.push(NetworkCard {
+                            name: name.clone(),
+                            ipv4: ipv4.to_string(),
+                        });
+                    }
+                }
+            }
+
+            cards.sort_by(sort_network_cards);
+
+            LocalNetworkInfo {
                 success: true,
                 cards,
                 error: None,
-            };
-        }
-
-        let output = Command::new("cmd")
-            .args(["/C", "chcp 65001>nul & ipconfig"])
-            .output();
-
-        match output {
-            Ok(result) => {
-                if !result.status.success() {
-                    return LocalNetworkInfo {
-                        success: false,
-                        cards: vec![],
-                        error: Some("读取本机网络信息失败".to_string()),
-                    };
-                }
-
-                let stdout = String::from_utf8_lossy(&result.stdout).to_string();
-                let cards = parse_windows_ipconfig(&stdout);
-
-                LocalNetworkInfo {
-                    success: true,
-                    cards,
-                    error: None,
-                }
             }
-            Err(error) => LocalNetworkInfo {
-                success: false,
-                cards: vec![],
-                error: Some(format!("读取本机网络信息异常: {}", error)),
-            },
         }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let output = Command::new("sh")
-            .args(["-lc", "ip addr || ifconfig"])
-            .output();
-
-        match output {
-            Ok(result) => {
-                if !result.status.success() {
-                    let stderr = String::from_utf8_lossy(&result.stderr).to_string();
-                    return LocalNetworkInfo {
-                        success: false,
-                        cards: vec![],
-                        error: Some(if stderr.trim().is_empty() {
-                            "读取本机网络信息失败".to_string()
-                        } else {
-                            stderr
-                        }),
-                    };
-                }
-
-                let stdout = String::from_utf8_lossy(&result.stdout).to_string();
-                let cards = parse_unix_network_info(&stdout);
-
-                LocalNetworkInfo {
-                    success: true,
-                    cards,
-                    error: None,
-                }
-            }
-            Err(error) => LocalNetworkInfo {
-                success: false,
-                cards: vec![],
-                error: Some(format!("读取本机网络信息异常: {}", error)),
-            },
-        }
+        Err(error) => LocalNetworkInfo {
+            success: false,
+            cards: vec![],
+            error: Some(format!("读取本机网络信息失败: {}", error)),
+        },
     }
 }
 
-#[cfg(target_os = "windows")]
-fn get_windows_network_cards_via_powershell() -> Result<Vec<NetworkCard>, String> {
-    let script = r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Get-NetIPConfiguration |
-  Where-Object { $_.NetAdapter.Status -eq 'Up' -and $_.IPv4Address } |
-  Select-Object InterfaceAlias, IPv4Address |
-  ConvertTo-Json -Compress"#;
+fn sort_network_cards(a: &NetworkCard, b: &NetworkCard) -> std::cmp::Ordering {
+    network_priority(&a.name)
+        .cmp(&network_priority(&b.name))
+        .then(a.name.cmp(&b.name))
+        .then(a.ipv4.cmp(&b.ipv4))
+}
 
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", script])
-        .output()
-        .map_err(|error| error.to_string())?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "PowerShell 读取网卡信息失败".to_string()
-        } else {
-            stderr
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let adapters: Vec<PowerShellNetworkAdapter> = if stdout.starts_with('[') {
-        serde_json::from_str(&stdout).map_err(|error| error.to_string())?
+fn network_priority(name: &str) -> u8 {
+    if is_wireless_adapter_name(name) {
+        0
+    } else if is_preferred_lan_adapter_name(name) {
+        1
     } else {
-        vec![serde_json::from_str(&stdout).map_err(|error| error.to_string())?]
-    };
+        2
+    }
+}
 
-    let mut cards = vec![];
-    for adapter in adapters {
-        let Some(name) = adapter.interface_alias.map(|value| value.trim().to_string()) else {
-            continue;
-        };
+fn is_preferred_lan_adapter_name(name: &str) -> bool {
+    let normalized = name.to_lowercase();
+    normalized.starts_with("eth") || normalized.starts_with("ethernet") || name.contains("以太网")
+}
 
-        if name.is_empty() || is_virtual_adapter_name(&name) {
-            continue;
-        }
+fn is_wireless_adapter_name(name: &str) -> bool {
+    let normalized = name.to_lowercase();
+    normalized.contains("wi-fi")
+        || normalized.contains("wifi")
+        || normalized.contains("wlan")
+        || normalized.contains("wireless")
+        || name.contains("无线")
+}
 
-        let Some(addresses) = adapter.ipv4_address else {
-            continue;
-        };
+fn should_include_ipv4(ip: Ipv4Addr) -> bool {
+    !ip.is_loopback() && !ip.is_unspecified()
+}
 
-        for address in addresses {
-            let Some(ipv4) = address.ip_address.map(|value| value.trim().to_string()) else {
-                continue;
-            };
+fn should_filter_adapter(name: &str, ip: Ipv4Addr) -> bool {
+    let normalized = name.to_lowercase();
 
-            if ipv4.is_empty() || ipv4.starts_with("169.254.") || ipv4 == "127.0.0.1" {
-                continue;
-            }
-
-            cards.push(NetworkCard {
-                name: name.clone(),
-                ipv4,
-            });
+    if ip.octets()[0] == 169 && ip.octets()[1] == 254 {
+        if normalized.starts_with("本地连接*")
+            || normalized.starts_with("local area connection*")
+            || normalized.contains("bluetooth")
+            || name.contains("蓝牙")
+            || normalized.contains("wi-fi direct")
+            || normalized.contains("microsoft wi-fi direct")
+        {
+            return true;
         }
     }
 
-    Ok(cards)
+    is_virtual_adapter_name(name)
 }
 
-#[cfg(target_os = "windows")]
+fn should_skip_adapter_name(name: &str) -> bool {
+    let normalized = name.to_lowercase();
+    normalized.starts_with("loopback")
+        || normalized.starts_with("isatap")
+        || normalized.starts_with("teredo")
+        || normalized.starts_with("local area connection*")
+        || normalized.starts_with("本地连接*")
+}
+
 fn is_virtual_adapter_name(name: &str) -> bool {
     let adapter_lower = name.to_lowercase();
     adapter_lower.contains("vmware")
         || adapter_lower.contains("vethernet")
         || adapter_lower.contains("wsl")
-        || adapter_lower.contains("virtual")
-        || adapter_lower.contains("bluetooth")
-        || adapter_lower.contains("蓝牙")
         || adapter_lower.contains("hyper-v")
+        || adapter_lower.contains("docker")
+        || adapter_lower.contains("br-")
+        || adapter_lower.contains("virbr")
+        || adapter_lower.contains("veth")
         || adapter_lower.contains("loopback")
         || adapter_lower.contains("pseudo")
-}
-
-#[cfg(target_os = "windows")]
-fn parse_windows_ipconfig(output: &str) -> Vec<NetworkCard> {
-    let mut cards = vec![];
-    let mut current_adapter: Option<String> = None;
-    let mut current_ipv4: Option<String> = None;
-
-    for line in output.lines() {
-        let trimmed = line.trim();
-
-        if trimmed.starts_with("Ethernet adapter") || trimmed.starts_with("Wireless LAN adapter") {
-            let name = trimmed
-                .replace("Ethernet adapter", "")
-                .replace("Wireless LAN adapter", "")
-                .trim()
-                .trim_end_matches(':')
-                .to_string();
-
-            current_adapter = Some(name);
-            current_ipv4 = None;
-            continue;
-        }
-
-        if trimmed.contains("IPv4 Address") && trimmed.contains(':') {
-            if let Some(pos) = trimmed.find(':') {
-                let ip_formatted = trimmed[pos + 1..].trim();
-                if !ip_formatted.is_empty() {
-                    current_ipv4 = Some(ip_formatted.to_string());
-                }
-            }
-            continue;
-        }
-
-        if trimmed.is_empty() || trimmed.starts_with("Ethernet adapter") || trimmed.starts_with("Wireless LAN adapter") {
-            if let (Some(adapter), Some(ipv4)) = (&current_adapter, &current_ipv4) {
-                if !is_virtual_adapter_name(adapter) {
-                    cards.push(NetworkCard {
-                        name: adapter.clone(),
-                        ipv4: ipv4.clone(),
-                    });
-                }
-            }
-
-            if trimmed.starts_with("Ethernet adapter") || trimmed.starts_with("Wireless LAN adapter") {
-                let name = trimmed
-                    .replace("Ethernet adapter", "")
-                    .replace("Wireless LAN adapter", "")
-                    .trim()
-                    .trim_end_matches(':')
-                    .to_string();
-                current_adapter = Some(name);
-                current_ipv4 = None;
-            } else {
-                current_adapter = None;
-                current_ipv4 = None;
-            }
-        }
-    }
-
-    if let (Some(adapter), Some(ipv4)) = (&current_adapter, &current_ipv4) {
-        if !is_virtual_adapter_name(adapter) {
-            cards.push(NetworkCard {
-                name: adapter.clone(),
-                ipv4: ipv4.clone(),
-            });
-        }
-    }
-
-    cards
-}
-
-#[cfg(not(target_os = "windows"))]
-fn parse_unix_network_info(output: &str) -> Vec<NetworkCard> {
-    let mut cards = vec![];
-    let mut current_adapter: Option<String> = None;
-
-    for line in output.lines() {
-        let trimmed = line.trim();
-
-        if !trimmed.is_empty() && !trimmed.starts_with(' ') && !trimmed.starts_with('\t') {
-            let name = trimmed.split([' ', ':']).next().unwrap_or("").trim();
-            if !name.is_empty() && name != "lo" && !name.contains("docker") {
-                current_adapter = Some(name.to_string());
-            }
-            continue;
-        }
-
-        if trimmed.contains("inet ") && !trimmed.contains("inet6") {
-            if let Some(adapter) = &current_adapter {
-                let parts = trimmed.split_whitespace().collect::<Vec<_>>();
-                if let Some(ip_pos) = parts.iter().position(|p| p == "inet") {
-                    if let Some(ip) = parts.get(ip_pos + 1) {
-                        let adapter_lower = adapter.to_lowercase();
-                        let is_virtual = adapter_lower.contains("vmware")
-                            || adapter_lower.contains("veth")
-                            || adapter_lower.contains("docker")
-                            || adapter_lower.contains("virbr");
-
-                        if !is_virtual {
-                            cards.push(NetworkCard {
-                                name: adapter.clone(),
-                                ipv4: ip.to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        if trimmed.contains("inet ") && trimmed.contains('/') && !trimmed.contains("inet6") {
-            if let Some(adapter) = &current_adapter {
-                let parts = trimmed.split_whitespace().collect::<Vec<_>>();
-                for part in parts {
-                    if part.starts_with("inet ") {
-                        continue;
-                    }
-                    if part.contains('/') && part.contains('.') {
-                        let ip = part.split('/').next().unwrap_or("").trim();
-                        if !ip.is_empty() {
-                            let adapter_lower = adapter.to_lowercase();
-                            let is_virtual = adapter_lower.contains("vmware")
-                                || adapter_lower.contains("veth")
-                                || adapter_lower.contains("docker")
-                                || adapter_lower.contains("virbr");
-
-                            if !is_virtual {
-                                cards.push(NetworkCard {
-                                    name: adapter.clone(),
-                                    ipv4: ip.to_string(),
-                                });
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    cards
+        || adapter_lower.contains("tunnel")
+        || adapter_lower.contains("microsoft kernel debug")
 }
