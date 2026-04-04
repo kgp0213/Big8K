@@ -1,221 +1,25 @@
-import { useMemo, useState } from "react";
-import {
-  Globe,
-  Loader2,
-  Wifi,
-  Wrench,
-  Upload,
-  Play,
-  TerminalSquare,
-  Settings2,
-  RefreshCw,
-  CheckCircle2,
-  Server,
-} from "lucide-react";
-import { useConnection } from "../App";
-import { isTauri, tauriInvoke } from "../utils/tauri";
-import type { ActionResult } from "../features/connection/types";
-
-type DeployAction = {
-  label: string;
-  description: string;
-  icon: typeof Wrench;
-  tone?: "default" | "primary" | "success" | "warning" | "danger";
-  command?: string;
-};
-
-const deployActions: DeployAction[] = [
-  { label: "Install tools", description: "部署 Python 库和工具", icon: Upload, command: "deploy_install_tools" },
-  { label: "Install App", description: "部署刷图应用", icon: Upload, command: "deploy_install_app" },
-  { label: "Set default pattern L128", description: "设置默认灰阶画面", icon: Play, command: "deploy_set_default_pattern" },
-  { label: "CMD line: multi-user", description: "命令行模式", icon: TerminalSquare, command: "deploy_set_multi_user" },
-  { label: "graphical 图形界面", description: "图形界面模式（执行后自动重启）", icon: RefreshCw, command: "deploy_set_graphical" },
-  { label: "开启SSH登录", description: "配置 SSH 并设置 root 密码", icon: Settings2, tone: "warning", command: "deploy_enable_ssh" },
-];
-
-const STATIC_IP_PRESETS = [
-  { label: "192.168.1.100", ip: "192.168.1.100", gateway: "192.168.1.1", description: "对应旧版 SetStaticIPaddress1p100ToolStripMenuItem_Click" },
-  { label: "192.168.137.100", ip: "192.168.137.100", gateway: "192.168.137.1", description: "对应旧版 SetStaticIPaddress137100ToolStripMenuItem_Click" },
-];
-
-const DEPLOY_ACTION_GROUPS = [
-  {
-    title: "基础环境",
-    description: "先把脚本和依赖装齐，后续画面同步、应用下发都依赖这里。",
-    actions: ["deploy_install_tools", "deploy_install_app"],
-  },
-  {
-    title: "默认显示与模式",
-    description: "部署后把平台切到适合联调的默认显示内容与运行模式；需要远程排查时也可先开启 SSH。",
-    actions: ["deploy_set_default_pattern", "deploy_set_multi_user", "deploy_enable_ssh"],
-  },
-  {
-    title: "系统UI",
-    description: "图形界面模式切换。执行后会自动重启。",
-    actions: ["deploy_set_graphical"],
-  },
-] as const;
-
-type HostNetworkCard = {
-  name: string;
-  ipv4: string;
-};
-
-type LocalNetworkInfo = {
-  success: boolean;
-  cards: HostNetworkCard[];
-  error?: string;
-};
-
-function getButtonToneClass(tone?: DeployAction["tone"]) {
-  switch (tone) {
-    case "warning":
-      return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300";
-    case "danger":
-      return "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300";
-    default:
-      return "border-gray-200 bg-white text-gray-700 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-200";
-  }
-}
+import { Wrench } from "lucide-react";
+import { DeployActionGroupsPanel, DeployNetworkPanel, useDeployTabModel } from "../features/deploy";
 
 export default function DeployTab() {
-  const { connection, appendLog } = useConnection();
-  const browserPreview = !isTauri();
-  const [isSettingIp, setIsSettingIp] = useState(false);
-  const [isLoadingLocalIp, setIsLoadingLocalIp] = useState(false);
-  const [runningAction, setRunningAction] = useState<string | null>(null);
-  const [completedActions, setCompletedActions] = useState<string[]>([]);
-  const [selectedPresetIp, setSelectedPresetIp] = useState<string | null>(null);
-  const [lastActionMessage, setLastActionMessage] = useState<string>(browserPreview ? "浏览器预览模式下会使用演示结果，不会真正下发脚本。" : "");
-  const [localNetworkInfo, setLocalNetworkInfo] = useState<LocalNetworkInfo | null>(
-    browserPreview
-      ? {
-          success: true,
-          cards: [
-            { name: "以太网 1", ipv4: "192.168.137.10" },
-            { name: "Wi‑Fi", ipv4: "172.20.10.5" },
-          ],
-        }
-      : null,
-  );
-
-  const adbReady = connection.type === "adb" && connection.connected;
-  const actionMap = useMemo(() => new Map(deployActions.map((item) => [item.command, item] as const)), []);
-
-  const stepSummary = useMemo(() => {
-    const total = deployActions.length;
-    const done = completedActions.length;
-    return { total, done, percent: total === 0 ? 0 : Math.round((done / total) * 100) };
-  }, [completedActions]);
-
-  const readyHint = adbReady ? "已满足 ADB 前置条件，可继续执行脚本。" : "此页多数脚本依赖 ADB，建议先在右侧连接面板接上 8K 平台。";
-
-  const networkCards = useMemo<HostNetworkCard[]>(() => {
-    return localNetworkInfo?.cards ?? [];
-  }, [localNetworkInfo]);
-
-  const handleViewLocalIp = async () => {
-    if (browserPreview) {
-      const previewInfo: LocalNetworkInfo = {
-        success: true,
-        cards: [
-          { name: "以太网 1", ipv4: "192.168.137.10" },
-          { name: "USB 网卡", ipv4: "192.168.1.23" },
-        ],
-      };
-      setLocalNetworkInfo(previewInfo);
-      setLastActionMessage("浏览器预览：已读取演示网络信息。");
-      appendLog("浏览器预览：已读取演示网络信息。", "success");
-      return;
-    }
-
-    setIsLoadingLocalIp(true);
-    try {
-      const result = await tauriInvoke<LocalNetworkInfo>("get_local_network_info");
-      if (result.success) {
-        setLocalNetworkInfo(result);
-        setLastActionMessage(`已读取本机 IP 地址，筛选出 ${result.cards.length} 个有线/无线网卡。`);
-        appendLog(`已读取本机 IP 地址，筛选出 ${result.cards.length} 个有线/无线网卡。`, "success");
-      } else {
-        appendLog(result.error || "读取本机 IP 地址失败", "error");
-      }
-    } catch (error) {
-      appendLog(`读取本机 IP 地址异常: ${String(error)}`, "error");
-    } finally {
-      setIsLoadingLocalIp(false);
-    }
-  };
-
-  const handleSetStaticIp = async (preset: typeof STATIC_IP_PRESETS[0]) => {
-    setSelectedPresetIp(preset.ip);
-
-    if (browserPreview) {
-      const message = `浏览器预览：已模拟将 8K 平台静态 IP 设置为 ${preset.ip}，网关 ${preset.gateway}`;
-      setLastActionMessage(message);
-      appendLog(message, "success");
-      return;
-    }
-
-    if (!adbReady) {
-      appendLog("请先通过 ADB 连接 8K 平台，再设置静态 IP", "warning");
-      return;
-    }
-
-    setIsSettingIp(true);
-    appendLog(`开始设置 8K 平台静态 IP：${preset.ip}，网关：${preset.gateway}`, "info");
-    try {
-      const result = await tauriInvoke<ActionResult>("set_static_ip", { request: { ip: preset.ip, gateway: preset.gateway } });
-      if (result.success) {
-        appendLog(result.output || `静态 IP 已设置为 ${preset.ip}`, "success");
-      } else {
-        appendLog(result.error || result.output || "设置静态 IP 失败", "error");
-      }
-    } catch (error) {
-      appendLog(`设置静态 IP 异常: ${String(error)}`, "error");
-    } finally {
-      setIsSettingIp(false);
-    }
-  };
-
-  const handleDeployAction = async (action: DeployAction) => {
-    if (!action.command) {
-      appendLog(`「${action.label}」当前先完成 UI 占位，功能接线待补。`, "warning");
-      return;
-    }
-
-    if (browserPreview) {
-      setRunningAction(action.command);
-      window.setTimeout(() => {
-        setCompletedActions((prev) => (prev.includes(action.command!) ? prev : [...prev, action.command!]));
-        setLastActionMessage(`浏览器预览：已模拟执行「${action.label}」`);
-        appendLog(`浏览器预览：已模拟执行「${action.label}」`, "success");
-        setRunningAction(null);
-      }, 450);
-      return;
-    }
-
-    if (!adbReady) {
-      appendLog(`请先通过 ADB 连接 8K 平台，再执行「${action.label}」`, "warning");
-      return;
-    }
-
-    setRunningAction(action.command);
-    appendLog(`开始执行：${action.label}`, "info");
-    try {
-      const result = await tauriInvoke<ActionResult>(action.command);
-      if (result.success) {
-        setCompletedActions((prev) => (prev.includes(action.command!) ? prev : [...prev, action.command!]));
-        setLastActionMessage(result.output || `${action.label} 执行完成`);
-        appendLog(result.output || `${action.label} 执行完成`, "success");
-      } else {
-        appendLog(result.error || result.output || `${action.label} 执行失败`, "error");
-      }
-    } catch (error) {
-      appendLog(`${action.label} 异常: ${String(error)}`, "error");
-    } finally {
-      setRunningAction(null);
-    }
-  };
+  const {
+    browserPreview,
+    adbReady,
+    actionMap,
+    stepSummary,
+    readyHint,
+    networkCards,
+    localNetworkInfo,
+    lastActionMessage,
+    runningAction,
+    completedActions,
+    isLoadingLocalIp,
+    isSettingIp,
+    selectedPresetIp,
+    handleViewLocalIp,
+    handleSetStaticIp,
+    handleDeployAction,
+  } = useDeployTabModel();
 
   return (
     <div className="space-y-4">
@@ -251,140 +55,25 @@ export default function DeployTab() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_340px] gap-4 items-start">
-        <div className="panel">
-          <div className="panel-header flex items-center gap-2">
-            <Upload className="w-4 h-4" />
-            刷机后依次点击
-          </div>
-          <div className="panel-body space-y-4">
-            <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
-              刷机后的快速初始化流程，按顺序执行更稳妥。
-            </div>
-            <div className="space-y-4">
-              {DEPLOY_ACTION_GROUPS.map((group) => (
-                <div key={group.title} className="rounded-2xl border border-gray-200 dark:border-gray-700 p-4 space-y-3">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{group.title}</div>
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{group.description}</div>
-                  </div>
+        <DeployActionGroupsPanel
+          actionMap={actionMap}
+          runningAction={runningAction}
+          completedActions={completedActions}
+          adbReady={adbReady}
+          browserPreview={browserPreview}
+          onRunAction={handleDeployAction}
+        />
 
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                    {group.actions.map((command) => {
-                      const item = actionMap.get(command);
-                      if (!item) return null;
-
-                      const Icon = item.icon;
-                      const isRunning = runningAction === item.command;
-                      const isDone = Boolean(item.command && completedActions.includes(item.command));
-                      const itemIndex = deployActions.findIndex((candidate) => candidate.command === item.command);
-                      const displayIndex = itemIndex === 4 ? 6 : itemIndex === 5 ? 5 : itemIndex + 1;
-
-                      return (
-                        <button
-                          key={item.label}
-                          type="button"
-                          onClick={() => void handleDeployAction(item)}
-                          disabled={(!adbReady && !browserPreview) || Boolean(runningAction)}
-                          className={`rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${getButtonToneClass(item.tone)}`}
-                          title={adbReady || browserPreview ? item.description : "请先连接 8K 平台"}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-black/5 text-xs font-semibold dark:bg-white/10">
-                              {isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : isDone ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600 dark:text-green-400" /> : displayIndex}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2 text-sm font-semibold">
-                                  <Icon className="w-4 h-4" />
-                                  {item.label}
-                                </div>
-                                <span className={`text-[11px] px-2 py-0.5 rounded-full ${isDone ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>
-                                  {isDone ? "已完成" : "待执行"}
-                                </span>
-                              </div>
-                              <div className="mt-1 text-xs opacity-80">{item.description}</div>
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="panel sticky top-0">
-            <div className="panel-header flex items-center gap-2">
-              <Globe className="w-4 h-4" />
-              网络 / IP 配置
-            </div>
-            <div className="panel-body space-y-4">
-              <div className="rounded-xl border border-blue-100 dark:border-blue-900/50 bg-blue-50/70 dark:bg-blue-900/10 px-4 py-3 text-sm text-blue-700 dark:text-blue-300">
-                常用部署场景保留为一键切换，点击后直接把 8K 平台设置成对口 IP。
-              </div>
-              <div className="space-y-3">
-                {STATIC_IP_PRESETS.map((preset) => (
-                  <button
-                    key={preset.ip}
-                    type="button"
-                    onClick={() => handleSetStaticIp(preset)}
-                    disabled={isSettingIp || !adbReady}
-                    className={`flex w-full items-center justify-between rounded-2xl border px-4 py-4 text-left transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${selectedPresetIp === preset.ip ? "border-primary-300 bg-primary-50 dark:border-primary-700 dark:bg-primary-900/20" : "border-blue-200 dark:border-blue-800 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/30"}`}
-                    title={preset.description}
-                  >
-                    <div>
-                      <div className="text-sm font-semibold text-blue-700 dark:text-blue-300">设置 8K 平台 IP：{preset.ip}</div>
-                      <div className="mt-1 text-xs text-blue-600/80 dark:text-blue-300/80">网关 {preset.gateway}</div>
-                    </div>
-                    <Globe className="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-300" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="panel-header flex items-center gap-2">
-              <Wifi className="w-4 h-4" />
-              本机网络信息
-            </div>
-            <div className="panel-body space-y-4">
-              <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/20 px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
-                点击后快速读取本机有线 / 无线网卡 IPv4，虚拟网卡与蓝牙网卡会自动过滤。
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleViewLocalIp()}
-                disabled={isLoadingLocalIp}
-                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 text-sm font-medium text-gray-700 dark:text-gray-200 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {isLoadingLocalIp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
-                查看本机 IP 地址
-              </button>
-
-              {localNetworkInfo && (
-                <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 px-4 py-4 space-y-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-gray-100">
-                    <Server className="w-4 h-4 text-primary-500" />
-                    本机网卡摘要
-                  </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-300">{networkCards.length > 0 ? `已筛选出 ${networkCards.length} 个有线 / 无线网卡` : localNetworkInfo.error ?? "未找到有线/无线网卡"}</div>
-                  <div className="grid grid-cols-1 gap-2 text-xs text-gray-500 dark:text-gray-400">
-                    {networkCards.map((item) => (
-                      <div key={item.name} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-3 space-y-1">
-                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">{item.name}</div>
-                        <div>IPv4：{item.ipv4}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <DeployNetworkPanel
+          adbReady={adbReady}
+          isSettingIp={isSettingIp}
+          isLoadingLocalIp={isLoadingLocalIp}
+          selectedPresetIp={selectedPresetIp}
+          localNetworkInfo={localNetworkInfo}
+          networkCards={networkCards}
+          onSetStaticIp={handleSetStaticIp}
+          onViewLocalIp={handleViewLocalIp}
+        />
       </div>
     </div>
   );
