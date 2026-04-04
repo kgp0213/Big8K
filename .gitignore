@@ -51,3 +51,8 @@ vite_run.log
 /fb_operate/
 /fb_RunApp/
 /dist-packages/
+
+# Local tool/workflow caches and ad-hoc docs
+/.understand-anything/
+/.workbuddy/
+/docs/ca-sdk2_en-US.pdf
