@@ -1,5 +1,5 @@
 import { tauriInvoke } from "../../utils/tauri";
-import { checkCodeFormatting, convertCodeToMipiCommands } from "../../utils/codeFormatter";
+import { convertCodeToMipiCommands, normalizeToStandardCode } from "../../utils/codeFormatter";
 import type { CommandActionResult, CommandPresetItem } from "./types";
 
 type AppendLog = (message: string, level?: "info" | "success" | "warning" | "error" | "debug") => void;
@@ -11,14 +11,20 @@ export const checkDebugCommand = (command: string, index: number, appendLog: App
     return;
   }
 
-  const result = checkCodeFormatting(trimmed);
+  const result = normalizeToStandardCode(trimmed);
   if (!result.ok) {
     result.errors.forEach((error) => appendLog(error, "error"));
-    appendLog(`代码检查失败：窗口 ${index + 1} 共 ${result.errors.length} 处问题`, "error");
+    appendLog(`代码检查未通过：窗口 ${index + 1} 共 ${result.errors.length} 处问题`, "error");
     return;
   }
 
-  appendLog(`代码检查通过：窗口 ${index + 1} 共 ${result.cleanedLines.length} 行`, "success");
+  result.warnings?.forEach((warning) => appendLog(warning, "warning"));
+  if ((result.warnings?.length ?? 0) > 0) {
+    appendLog(`代码检查通过，但窗口 ${index + 1} 检测到 ${result.warnings?.length ?? 0} 行疑似格式化代码样式输入，请人工重点检查`, "warning");
+    return;
+  }
+
+  appendLog(`代码检查通过：窗口 ${index + 1} 可转换为 ${result.standardLines.length} 行标准代码`, "success");
 };
 
 export const sendDebugCommand = async (

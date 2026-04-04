@@ -110,7 +110,7 @@ export default function DriverCodePanel({
               className="btn-secondary text-sm flex items-center justify-center gap-2 min-w-[140px]"
             >
               <FileCode className="w-4 h-4" />
-              可转换性检查
+              代码检查
             </button>
             <button
               onClick={onNormalizeToStandard}

@@ -31,7 +31,7 @@ export default function DebugMultiCommandPanel({ commands, onChange, onCheck, on
                 className="btn-primary flex items-center justify-center gap-2"
               >
                 <Send className="w-4 h-4" />
-                发送命令
+                代码下发
               </button>
             </div>
           </div>
