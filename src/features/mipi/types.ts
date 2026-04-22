@@ -25,6 +25,8 @@ export interface TimingConfig {
   scramblingEnable: boolean;
   dataSwap: boolean;
   dualChannel: boolean;
+  panelName?: string;
+  version?: string;
 }
 
 export interface RecentLcdConfigItem {

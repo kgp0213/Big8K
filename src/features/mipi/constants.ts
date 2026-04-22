@@ -27,6 +27,8 @@ export const defaultTiming: TimingConfig = {
   scramblingEnable: false,
   dataSwap: false,
   dualChannel: false,
+  panelName: "DSI-Panel0123456",
+  version: "26042216",
 };
 
 export const DEFAULT_DRIVER_CODE = [

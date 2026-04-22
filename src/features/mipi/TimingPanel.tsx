@@ -1,5 +1,25 @@
 import type { TimingConfig } from "./types";
 
+const PANEL_NAME_LEN = 16;
+const VERSION_LEN = 8;
+
+const enforceFixedLength = (raw: string, len: number, padChar = "x") => {
+  const normalized = raw ?? "";
+  if (normalized.length >= len) {
+    return normalized.slice(0, len);
+  }
+  return normalized + padChar.repeat(len - normalized.length);
+};
+
+const getCurrentVersionStamp = () => {
+  const now = new Date();
+  const yy = String(now.getFullYear()).slice(-2);
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  return `${yy}${mm}${dd}${hh}`;
+};
+
 type Props = {
   timing: TimingConfig;
   showBasicSection: boolean;
@@ -74,6 +94,66 @@ export default function TimingPanel({
               <div />
               <div />
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  Panel Name（固定 {PANEL_NAME_LEN} 字符）
+                </label>
+                <input
+                  type="text"
+                  value={timing.panelName ?? ""}
+                  placeholder="示例: DSI-Panel0123456（不足补 x，超出截断）"
+                  onChange={(e) => {
+                    const trimmed = e.target.value.slice(0, PANEL_NAME_LEN);
+                    onUpdateTiming("panelName", trimmed);
+                  }}
+                  onBlur={() => {
+                    const finalValue = enforceFixedLength(timing.panelName ?? "", PANEL_NAME_LEN, "x");
+                    onUpdateTiming("panelName", finalValue);
+                  }}
+                  className="input text-sm py-1.5"
+                />
+                <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  当前长度 {(timing.panelName ?? "").length}/{PANEL_NAME_LEN}（失焦自动补齐到固定长度）
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  Version（YYMMDDHH，固定 {VERSION_LEN} 字符）
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={timing.version ?? ""}
+                    placeholder="示例: 26042216"
+                    onChange={(e) => {
+                      const digitsOnly = e.target.value.replace(/[^0-9]/g, "").slice(0, VERSION_LEN);
+                      onUpdateTiming("version", digitsOnly);
+                    }}
+                    onBlur={() => {
+                      const finalValue = enforceFixedLength((timing.version ?? "").replace(/[^0-9]/g, ""), VERSION_LEN, "x");
+                      onUpdateTiming("version", finalValue);
+                    }}
+                    className="input text-sm py-1.5 flex-1"
+                  />
+                  <button
+                    type="button"
+                    className="px-3 py-1.5 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200"
+                    onClick={() => {
+                      onUpdateTiming("version", enforceFixedLength(getCurrentVersionStamp(), VERSION_LEN, "x"));
+                    }}
+                  >
+                    当前时间
+                  </button>
+                </div>
+                <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  自动格式：两位年+月+日+小时（例如 26042216）
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-7 gap-3 items-start">
               <div>
                 <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Interface</label>
