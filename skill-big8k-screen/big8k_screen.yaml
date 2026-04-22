@@ -1,0 +1,152 @@
+# Big8K Screen Skill Configuration
+# OpenClaw Skill Definition
+
+name: big8k_screen
+version: 1.0.0
+description: Big8K OpenClaw P0 screen control skill
+author: Big8K Team
+
+requirements:
+  python: ">=3.8"
+
+actions:
+  - name: big8k.list_devices
+    description: 列出当前连接的 ADB 设备
+
+  - name: big8k.select_device
+    description: 选择后续操作使用的目标设备
+    params:
+      - name: device_id
+        type: string
+        required: true
+
+  - name: big8k.device_probe
+    description: 检查 framebuffer、vismpwr、python3 等设备就绪状态
+
+  - name: big8k.generate_timing_bin
+    description: 根据 OLED 时序请求生成 vis-timing.bin
+    params:
+      - name: request
+        type: object
+        required: true
+
+  - name: big8k.export_oled_config_json
+    description: 导出 OLED 配置 JSON，并在程序目录生成 vis-timing.bin
+    params:
+      - name: request
+        type: object
+        required: true
+
+  - name: big8k.download_oled_config_and_reboot
+    description: 生成 OLED 配置并下发到设备，随后重启
+    params:
+      - name: request
+        type: object
+        required: true
+
+  - name: big8k.sync_runtime_patterns
+    description: 同步 runtime pattern 脚本到设备
+
+  - name: big8k.display_runtime_pattern
+    description: 显示运行时测试图案
+    params:
+      - name: pattern
+        type: string
+        required: true
+        options: [gray8, gray64, gray128, gray192, gray255, red, green, blue, white, black, checkerboard, gradient]
+
+  - name: big8k.display_logic_pattern
+    description: 按 pattern_id 显示逻辑图案
+    params:
+      - name: pattern_id
+        type: integer
+        required: true
+
+  - name: big8k.display_local_image
+    description: 上传并显示本地图片
+    params:
+      - name: image_path
+        type: string
+        required: true
+      - name: remote_name
+        type: string
+        required: false
+
+  - name: big8k.display_remote_image
+    description: 显示设备上已存在的图片
+    params:
+      - name: remote_path
+        type: string
+        required: true
+
+  - name: big8k.display_image_base64
+    description: 将 base64 图片内容写入临时文件后上传显示
+    params:
+      - name: filename
+        type: string
+        required: true
+      - name: base64_data
+        type: string
+        required: true
+      - name: remote_name
+        type: string
+        required: false
+
+  - name: big8k.play_video
+    description: 上传并启动视频播放
+    params:
+      - name: video_path
+        type: string
+        required: true
+      - name: zoom_mode
+        type: integer
+        required: false
+        default: 0
+      - name: show_framerate
+        type: integer
+        required: false
+        default: 0
+
+  - name: big8k.video_control
+    description: 控制当前视频播放
+    params:
+      - name: action
+        type: string
+        required: true
+        options: [pause, resume, stop]
+
+  - name: big8k.get_video_playback_status
+    description: 获取当前视频播放状态
+
+  - name: big8k.deploy_install_tools
+    description: 下发运行所需工具和依赖到设备
+
+  - name: big8k.deploy_install_app
+    description: 下发应用资源和默认开机脚本到设备
+
+workflows:
+  - name: runtime_pattern_smoke
+    description: 基础冒烟流程：探测设备 -> 同步 runtime pattern -> 显示白图
+
+  - name: oled_config_push_and_reboot
+    description: 生成 OLED 配置并下载到设备后重启
+
+  - name: video_playback_smoke
+    description: 上传视频、检查状态并执行 pause/resume/stop
+
+examples:
+  - |
+    big8k.list_devices()
+
+  - |
+    big8k.select_device(device_id="DEVICE_SERIAL")
+
+  - |
+    big8k.device_probe()
+
+  - |
+    big8k.sync_runtime_patterns()
+    big8k.display_runtime_pattern(pattern="white")
+
+  - |
+    big8k.video_control(action="resume")

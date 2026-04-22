@@ -1,0 +1,97 @@
+# Big8K Screen Skill Workflows
+# OpenClaw P0 workflows
+
+workflows:
+  - name: runtime_pattern_smoke
+    description: 基础冒烟流程：设备探测 -> 同步 runtime pattern -> 显示白图
+    steps:
+      - action: big8k.device_probe
+        description: 探测设备状态
+      - action: big8k.sync_runtime_patterns
+        description: 同步 runtime pattern 脚本
+      - action: big8k.display_runtime_pattern
+        description: 显示白色图案
+        params:
+          pattern: white
+
+  - name: local_image_smoke
+    description: 上传本地图片并在设备上显示
+    params:
+      - name: image_path
+        required: true
+      - name: remote_name
+        required: false
+    steps:
+      - action: big8k.device_probe
+        description: 探测设备状态
+      - action: big8k.display_local_image
+        description: 上传并显示本地图片
+        params:
+          image_path: "{{image_path}}"
+          remote_name: "{{remote_name}}"
+
+  - name: oled_config_push_and_reboot
+    description: 生成 OLED 配置并下载到设备后重启
+    params:
+      - name: request
+        required: true
+    steps:
+      - action: big8k.generate_timing_bin
+        description: 生成 vis-timing.bin
+        params:
+          request: "{{request}}"
+      - action: big8k.export_oled_config_json
+        description: 导出 OLED 配置 JSON
+        params:
+          request: "{{request}}"
+      - action: big8k.download_oled_config_and_reboot
+        description: 下载 OLED 配置并重启
+        params:
+          request: "{{request}}"
+
+  - name: video_playback_smoke
+    description: 上传视频、检查状态并执行 pause/resume/stop
+    params:
+      - name: video_path
+        required: true
+      - name: zoom_mode
+        required: false
+        default: 0
+      - name: show_framerate
+        required: false
+        default: 0
+    steps:
+      - action: big8k.play_video
+        description: 上传并启动视频播放
+        params:
+          video_path: "{{video_path}}"
+          zoom_mode: "{{zoom_mode}}"
+          show_framerate: "{{show_framerate}}"
+      - action: big8k.get_video_playback_status
+        description: 检查播放状态
+      - action: big8k.video_control
+        description: 暂停视频
+        params:
+          action: pause
+      - action: big8k.video_control
+        description: 恢复视频
+        params:
+          action: resume
+      - action: big8k.video_control
+        description: 停止视频
+        params:
+          action: stop
+
+  - name: deploy_and_display_smoke
+    description: 安装工具和应用资源后显示 runtime pattern
+    steps:
+      - action: big8k.deploy_install_tools
+        description: 安装工具依赖
+      - action: big8k.deploy_install_app
+        description: 安装应用资源
+      - action: big8k.sync_runtime_patterns
+        description: 同步 runtime pattern 脚本
+      - action: big8k.display_runtime_pattern
+        description: 显示绿色图案
+        params:
+          pattern: green

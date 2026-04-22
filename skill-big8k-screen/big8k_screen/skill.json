@@ -1,0 +1,35 @@
+{
+  "name": "big8k_screen",
+  "version": "1.0.0",
+  "description": "Big8K OpenClaw P0 screen control skill",
+  "author": "Big8K Team",
+  "dependencies": {
+    "adb": ">=1.3.0"
+  },
+  "actions": [
+    "big8k.list_devices",
+    "big8k.select_device",
+    "big8k.device_probe",
+    "big8k.generate_timing_bin",
+    "big8k.export_oled_config_json",
+    "big8k.download_oled_config_and_reboot",
+    "big8k.sync_runtime_patterns",
+    "big8k.display_runtime_pattern",
+    "big8k.display_logic_pattern",
+    "big8k.display_local_image",
+    "big8k.display_remote_image",
+    "big8k.display_image_base64",
+    "big8k.play_video",
+    "big8k.video_control",
+    "big8k.get_video_playback_status",
+    "big8k.deploy_install_tools",
+    "big8k.deploy_install_app"
+  ],
+  "workflows": [
+    "runtime_pattern_smoke",
+    "local_image_smoke",
+    "oled_config_push_and_reboot",
+    "video_playback_smoke",
+    "deploy_and_display_smoke"
+  ]
+}
