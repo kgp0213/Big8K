@@ -230,6 +230,8 @@ pub struct TimingBinRequest {
     pub slice_height: u32,
     pub scrambling_enable: bool,
     pub data_swap: bool,
+    pub panel_name: Option<String>,
+    pub version: Option<String>,
     pub init_codes: Vec<String>,
 }
 
@@ -266,6 +268,8 @@ pub struct LegacyTimingConfig {
     pub scrambling_enable: bool,
     pub data_swap: bool,
     pub dual_channel: bool,
+    pub panel_name: Option<String>,
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

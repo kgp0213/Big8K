@@ -28,6 +28,28 @@ fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String
     let hsync = u16::from_be_bytes([bytes[17], bytes[18]]) as u32;
     let vsync = u16::from_be_bytes([bytes[19], bytes[20]]) as u32;
 
+    let (panel_name, version) = if bytes.len() >= 44
+        && bytes[0] == 0x5A
+        && bytes[1] == 0x5A
+        && bytes[2] == 0xA5
+        && bytes[3] == 0xA5
+    {
+        (
+            Some(
+                String::from_utf8_lossy(&bytes[20..36])
+                    .trim_end_matches(char::from(0))
+                    .to_string(),
+            ),
+            Some(
+                String::from_utf8_lossy(&bytes[36..44])
+                    .trim_end_matches(char::from(0))
+                    .to_string(),
+            ),
+        )
+    } else {
+        (None, None)
+    };
+
     let hs_polarity = bytes[21] != 0;
     let vs_polarity = bytes[22] != 0;
     let de_polarity = bytes[23] != 0;
@@ -123,6 +145,8 @@ fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String
             scrambling_enable,
             data_swap,
             dual_channel,
+            panel_name,
+            version,
         }),
         init_codes,
         error: None,
@@ -164,6 +188,8 @@ fn parse_oled_config_json_file(path: &str) -> Result<LegacyLcdConfigResult, Stri
             scrambling_enable: request.scrambling_enable,
             data_swap: request.data_swap,
             dual_channel: false,
+            panel_name: request.panel_name,
+            version: request.version,
         }),
         init_codes: request.init_codes,
         error: None,

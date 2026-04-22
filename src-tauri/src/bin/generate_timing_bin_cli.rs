@@ -30,6 +30,8 @@ pub struct TimingBinRequest {
     pub slice_height: u32,
     pub scrambling_enable: bool,
     pub data_swap: bool,
+    pub panel_name: Option<String>,
+    pub version: Option<String>,
     pub init_codes: Vec<String>,
 }
 
@@ -61,6 +63,8 @@ pub struct LegacyTimingConfig {
     pub scrambling_enable: bool,
     pub data_swap: bool,
     pub dual_channel: bool,
+    pub panel_name: Option<String>,
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,6 +92,28 @@ fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String
     let vfp = u16::from_be_bytes([bytes[15], bytes[16]]) as u32;
     let hsync = u16::from_be_bytes([bytes[17], bytes[18]]) as u32;
     let vsync = u16::from_be_bytes([bytes[19], bytes[20]]) as u32;
+
+    let (panel_name, version) = if bytes.len() >= 44
+        && bytes[0] == 0x5A
+        && bytes[1] == 0x5A
+        && bytes[2] == 0xA5
+        && bytes[3] == 0xA5
+    {
+        (
+            Some(
+                String::from_utf8_lossy(&bytes[20..36])
+                    .trim_end_matches(char::from(0))
+                    .to_string(),
+            ),
+            Some(
+                String::from_utf8_lossy(&bytes[36..44])
+                    .trim_end_matches(char::from(0))
+                    .to_string(),
+            ),
+        )
+    } else {
+        (None, None)
+    };
 
     let hs_polarity = bytes[21] != 0;
     let vs_polarity = bytes[22] != 0;
@@ -168,6 +194,8 @@ fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String
             scrambling_enable,
             data_swap,
             dual_channel,
+            panel_name,
+            version,
         }),
         init_codes,
         error: None,
@@ -193,6 +221,26 @@ fn write_entry(buffer: &mut Vec<u8>, offset: u32, length: u32) {
 
 fn align(size: usize, alignment: usize) -> usize {
     (size + alignment - 1) & !(alignment - 1)
+}
+
+fn normalize_fixed_bytes(raw: Option<&str>, len: usize, pad: u8, digits_only: bool) -> Vec<u8> {
+    let mut bytes: Vec<u8> = raw
+        .unwrap_or_default()
+        .as_bytes()
+        .iter()
+        .copied()
+        .filter(|b| !digits_only || b.is_ascii_digit())
+        .collect();
+
+    if bytes.len() > len {
+        bytes.truncate(len);
+    }
+
+    if bytes.len() < len {
+        bytes.extend(std::iter::repeat(pad).take(len - bytes.len()));
+    }
+
+    bytes
 }
 
 fn generate_timing_bin_to_path(request: &TimingBinRequest, output_path: &Path) -> Result<(), String> {
@@ -225,10 +273,20 @@ fn generate_timing_bin_to_path(request: &TimingBinRequest, output_path: &Path) -
     panel_vendor[..16].copy_from_slice(b"Visonox890123456");
     out.extend_from_slice(&panel_vendor);
     let mut panel_name = [0u8; 16];
-    panel_name[..16].copy_from_slice(b"DSI-Panel0123456");
+    panel_name.copy_from_slice(&normalize_fixed_bytes(
+        request.panel_name.as_deref(),
+        16,
+        b'x',
+        false,
+    ));
     out.extend_from_slice(&panel_name);
     let mut version = [0u8; 8];
-    version.copy_from_slice(b"1.234567");
+    version.copy_from_slice(&normalize_fixed_bytes(
+        request.version.as_deref(),
+        8,
+        b'x',
+        true,
+    ));
     out.extend_from_slice(&version);
 
     write_entry(&mut out, timing_offset as u32, timing_size as u32);
@@ -343,6 +401,8 @@ fn to_request(parsed: LegacyLcdConfigResult) -> Result<TimingBinRequest, String>
         slice_height: timing.slice_height,
         scrambling_enable: timing.scrambling_enable,
         data_swap: timing.data_swap,
+        panel_name: timing.panel_name,
+        version: timing.version,
         init_codes: parsed.init_codes,
     })
 }

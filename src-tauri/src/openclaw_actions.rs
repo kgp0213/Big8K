@@ -50,6 +50,26 @@ fn align(size: usize, alignment: usize) -> usize {
     (size + alignment - 1) & !(alignment - 1)
 }
 
+fn normalize_fixed_bytes(raw: Option<&str>, len: usize, pad: u8, digits_only: bool) -> Vec<u8> {
+    let mut bytes: Vec<u8> = raw
+        .unwrap_or_default()
+        .as_bytes()
+        .iter()
+        .copied()
+        .filter(|b| !digits_only || b.is_ascii_digit())
+        .collect();
+
+    if bytes.len() > len {
+        bytes.truncate(len);
+    }
+
+    if bytes.len() < len {
+        bytes.extend(std::iter::repeat(pad).take(len - bytes.len()));
+    }
+
+    bytes
+}
+
 pub fn generate_timing_bin_action(request: &TimingBinRequest) -> OpenClawResult<String> {
     let output_path = match timing_bin_output_path() {
         Ok(path) => path,
@@ -108,10 +128,20 @@ pub fn generate_timing_bin_action(request: &TimingBinRequest) -> OpenClawResult<
     panel_vendor[..16].copy_from_slice(b"Visonox890123456");
     out.extend_from_slice(&panel_vendor);
     let mut panel_name = [0u8; 16];
-    panel_name[..16].copy_from_slice(b"DSI-Panel0123456");
+    panel_name.copy_from_slice(&normalize_fixed_bytes(
+        request.panel_name.as_deref(),
+        16,
+        b'x',
+        false,
+    ));
     out.extend_from_slice(&panel_name);
     let mut version = [0u8; 8];
-    version.copy_from_slice(b"1.234567");
+    version.copy_from_slice(&normalize_fixed_bytes(
+        request.version.as_deref(),
+        8,
+        b'x',
+        true,
+    ));
     out.extend_from_slice(&version);
 
     write_entry(&mut out, timing_offset as u32, timing_size as u32);

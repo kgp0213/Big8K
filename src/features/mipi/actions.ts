@@ -195,6 +195,8 @@ export const applyOledConfig = async (
     scramblingEnable: result.timing.scrambling_enable,
     dataSwap: result.timing.data_swap,
     dualChannel: result.timing.dual_channel,
+    panelName: result.timing.panel_name,
+    version: result.timing.version,
   };
 
   options.setTiming(nextTiming);
@@ -258,6 +260,8 @@ const buildValidatedTimingRequest = (
     slice_height: timing.sliceHeight,
     scrambling_enable: timing.scramblingEnable,
     data_swap: timing.dataSwap,
+    panel_name: timing.panelName,
+    version: timing.version,
     init_codes: validation.cleanedLines,
   };
 

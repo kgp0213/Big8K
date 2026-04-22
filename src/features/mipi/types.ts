@@ -64,6 +64,8 @@ export interface LegacyLcdConfigResult {
     scrambling_enable: boolean;
     data_swap: boolean;
     dual_channel: boolean;
+    panel_name?: string;
+    version?: string;
   };
   init_codes: string[];
   error?: string;
@@ -107,6 +109,8 @@ export interface TimingBinRequest {
   slice_height: number;
   scrambling_enable: boolean;
   data_swap: boolean;
+  panel_name?: string;
+  version?: string;
   init_codes: string[];
 }
 
