@@ -85,6 +85,7 @@ pub struct GenericResult {
 pub struct DeviceProbeResult {
     pub success: bool,
     pub model: Option<String>,
+    pub panel_name: Option<String>,
     pub virtual_size: Option<String>,
     pub bits_per_pixel: Option<String>,
     pub mipi_mode: Option<String>,
@@ -948,12 +949,13 @@ fn ssh_exec(_host: String, _port: u16, _username: String, _password: String, _co
 
 #[tauri::command]
 fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeResult {
-    const PROBE_SCRIPT_VERSION: &str = "20260422_1432";
+    const PROBE_SCRIPT_VERSION: &str = "20260422_1918";
     const PROBE_SCRIPT_BODY: &str = include_str!("../scripts/probe_device_20260422_1405.sh");
 
     let empty_result = |error: String| DeviceProbeResult {
         success: false,
         model: None,
+        panel_name: None,
         virtual_size: None,
         bits_per_pixel: None,
         mipi_mode: None,
@@ -1050,6 +1052,7 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
     };
 
     let mut model = None;
+    let mut panel_name = None;
     let mut virtual_size = None;
     let mut bits_per_pixel = None;
     let mut mipi_mode = None;
@@ -1065,6 +1068,10 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
         if let Some(value) = line.strip_prefix("MIPI_MODE=") {
             if !value.trim().is_empty() {
                 mipi_mode = Some(value.trim().to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("PANEL_NAME=") {
+            if !value.trim().is_empty() {
+                panel_name = Some(value.trim().to_string());
             }
         } else if let Some(value) = line.strip_prefix("MODEL=") {
             if !value.trim().is_empty() {
@@ -1107,6 +1114,7 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
     }
 
     if model.is_none()
+        && panel_name.is_none()
         && virtual_size.is_none()
         && bits_per_pixel.is_none()
         && mipi_mode.is_none()
@@ -1124,6 +1132,7 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
     DeviceProbeResult {
         success: true,
         model,
+        panel_name,
         virtual_size,
         bits_per_pixel,
         mipi_mode,

@@ -21,6 +21,7 @@ export interface ActionResult {
 export interface DeviceProbeResult {
   success: boolean;
   model?: string;
+  panel_name?: string;
   virtual_size?: string;
   bits_per_pixel?: string;
   mipi_mode?: string;

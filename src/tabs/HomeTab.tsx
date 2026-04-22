@@ -6,6 +6,7 @@ import { isTauri, tauriInvoke } from "../utils/tauri";
 type ScreenProbeInfo = {
   success: boolean;
   model?: string;
+  panel_name?: string;
   virtual_size?: string;
   bits_per_pixel?: string;
   mipi_mode?: string;
@@ -22,6 +23,7 @@ type ScreenProbeInfo = {
 const previewProbe: ScreenProbeInfo = {
   success: true,
   model: "RK3588 Dev Preview",
+  panel_name: "M559-CMD4201280x",
   virtual_size: "900,960",
   bits_per_pixel: "32",
   mipi_mode: "VIDEO",
@@ -123,7 +125,7 @@ export default function HomeTab() {
                   <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 text-xs">
                     <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/30 px-3 py-3">
                       <div className="text-[11px] text-gray-400">型号</div>
-                      <div className="mt-1 font-medium text-gray-800 dark:text-gray-100">{probeInfo.model || "未识别"}</div>
+                      <div className="mt-1 font-medium text-gray-800 dark:text-gray-100">{probeInfo.panel_name || probeInfo.model || "未识别"}</div>
                     </div>
                     <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/30 px-3 py-3">
                       <div className="text-[11px] text-gray-400">分辨率</div>

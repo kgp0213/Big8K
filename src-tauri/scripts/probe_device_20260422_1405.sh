@@ -14,6 +14,13 @@ else
     fi
 fi
 MODEL=$(getprop ro.product.model 2>/dev/null)
+PANEL_NAME=""
+for CAND in /vismm/vis-timing.bin /lib/firmware/vis-timing.bin /usr/lib/firmware/vis-timing.bin; do
+    if [ -f "$CAND" ]; then
+        PANEL_NAME=$(dd if="$CAND" bs=1 skip=20 count=16 2>/dev/null | tr -d '\000' | tr -d '\r' | tr -d '\n')
+        [ -n "$PANEL_NAME" ] && break
+    fi
+done
 VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null)
 BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null)
 LANES=$(dmesg 2>/dev/null | grep -o 'dsi,lanes: [0-9]*' | tail -n 1 | sed 's/dsi,lanes: //')
@@ -25,6 +32,7 @@ MEM=$(awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END {if (t>0) printf("%.1f%% 
 TEMP=$(awk '{printf("%.1f", $1/1000)}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
 echo MIPI_MODE=$MIPI_MODE
 echo MODEL=$MODEL
+echo PANEL_NAME=$PANEL_NAME
 echo VSIZE=$VSIZE
 echo BPP=$BPP
 echo LANES=$LANES
