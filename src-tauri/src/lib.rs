@@ -1,6 +1,9 @@
 mod display_runtime;
 mod host_env;
 mod oled_config;
+mod openclaw_actions;
+mod openclaw_adapter;
+mod openclaw_types;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -941,112 +944,193 @@ fn ssh_exec(_host: String, _port: u16, _username: String, _password: String, _co
 
 #[tauri::command]
 fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeResult {
-    let command = r#"MODEL=$(getprop ro.product.model 2>/dev/null); VSIZE=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null); BPP=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null); if dmesg 2>/dev/null | grep -q 'Initialized in CMD mode'; then MIPI_MODE=CMD; else MIPI_MODE=VIDEO; fi; LANES=$( (dmesg 2>/dev/null | grep -ioE 'dsi,lanes: *[0-9]+' | tail -n 1 | grep -ioE '[0-9]+') || (dmesg 2>/dev/null | grep -ioE 'lanes=[0-9]+' | tail -n 1 | grep -ioE '[0-9]+') ); [ -e /dev/fb0 ] && echo FB0=1 || echo FB0=0; command -v vismpwr >/dev/null 2>&1 && echo VISMPWR=1 || echo VISMPWR=0; command -v python3 >/dev/null 2>&1 && echo PYTHON3=1 || echo PYTHON3=0; CPU=$(awk '/cpu / {usage=($2+$4)*100/($2+$4+$5)} END {printf("%.1f%%", usage)}' /proc/stat 2>/dev/null); MEM=$(awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END {if (t>0) printf("%.1f%% (%dMB / %dMB)", (t-a)*100/t, (t-a)/1024, t/1024)}' /proc/meminfo 2>/dev/null); TEMP=$(awk '{printf("%.1f", $1/1000)}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null); echo MODEL=$MODEL; echo VSIZE=$VSIZE; echo BPP=$BPP; echo MIPI_MODE=$MIPI_MODE; echo LANES=$LANES; echo CPU=$CPU; echo MEM=$MEM; echo TEMP=$TEMP"#;
+    const PROBE_SCRIPT_VERSION: &str = "20260422_1432";
+    const PROBE_SCRIPT_BODY: &str = include_str!("../scripts/probe_device_20260422_1405.sh");
 
-    match adb_shell_internal(&state, command) {
-        Ok(result) if result.success => {
-            let mut model = None;
-            let mut virtual_size = None;
-            let mut bits_per_pixel = None;
-            let mut mipi_mode = None;
-            let mut mipi_lanes = None;
-            let mut fb0_available = false;
-            let mut vismpwr_available = false;
-            let mut python3_available = false;
-            let mut cpu_usage = None;
-            let mut memory_usage = None;
-            let mut temperature_c = None;
+    let empty_result = |error: String| DeviceProbeResult {
+        success: false,
+        model: None,
+        virtual_size: None,
+        bits_per_pixel: None,
+        mipi_mode: None,
+        mipi_lanes: None,
+        fb0_available: false,
+        vismpwr_available: false,
+        python3_available: false,
+        cpu_usage: None,
+        memory_usage: None,
+        temperature_c: None,
+        error: Some(error),
+    };
 
-            for line in result.output.lines() {
-                if let Some(value) = line.strip_prefix("MODEL=") {
-                    if !value.trim().is_empty() {
-                        model = Some(value.trim().to_string());
-                    }
-                } else if let Some(value) = line.strip_prefix("VSIZE=") {
-                    if !value.trim().is_empty() {
-                        virtual_size = Some(value.trim().to_string());
-                    }
-                } else if let Some(value) = line.strip_prefix("BPP=") {
-                    if !value.trim().is_empty() {
-                        bits_per_pixel = Some(value.trim().to_string());
-                    }
-                } else if let Some(value) = line.strip_prefix("MIPI_MODE=") {
-                    if !value.trim().is_empty() {
-                        mipi_mode = Some(value.trim().to_string());
-                    }
-                } else if let Some(value) = line.strip_prefix("LANES=") {
-                    if let Ok(parsed) = value.trim().parse::<u32>() {
-                        if parsed > 0 {
-                            mipi_lanes = Some(parsed);
-                        }
-                    }
-                } else if line.trim() == "FB0=1" {
-                    fb0_available = true;
-                } else if line.trim() == "VISMPWR=1" {
-                    vismpwr_available = true;
-                } else if line.trim() == "PYTHON3=1" {
-                    python3_available = true;
-                } else if let Some(value) = line.strip_prefix("CPU=") {
-                    if !value.trim().is_empty() {
-                        cpu_usage = Some(value.trim().to_string());
-                    }
-                } else if let Some(value) = line.strip_prefix("MEM=") {
-                    if !value.trim().is_empty() {
-                        memory_usage = Some(value.trim().to_string());
-                    }
-                } else if let Some(value) = line.strip_prefix("TEMP=") {
-                    if !value.trim().is_empty() {
-                        temperature_c = Some(format!("{}°C", value.trim()));
-                    }
-                }
+    let device_id = match resolve_device_id(&state) {
+        Ok(id) => id,
+        Err(error) => return empty_result(error),
+    };
+
+    let remote_dir = "/vismm/python-script";
+    let remote_script = format!("{}/probe_device_{}.sh", remote_dir, PROBE_SCRIPT_VERSION);
+
+    match run_adb(&["-s", &device_id, "shell", "mkdir", "-p", remote_dir]) {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return empty_result(if stderr.is_empty() {
+                "创建设备探测脚本目录失败".to_string()
+            } else {
+                format!("创建设备探测脚本目录失败: {}", stderr)
+            });
+        }
+        Err(error) => return empty_result(error),
+    }
+
+    let script_exists = match run_adb(&["-s", &device_id, "shell", "test", "-f", &remote_script]) {
+        Ok(output) => output.status.success(),
+        Err(error) => return empty_result(error),
+    };
+
+    if !script_exists {
+        let local_script_path = std::env::temp_dir().join(format!("probe_device_{}.sh", PROBE_SCRIPT_VERSION));
+        let normalized_script = PROBE_SCRIPT_BODY.replace("\r\n", "\n").replace('\r', "\n");
+        if let Err(error) = std::fs::write(&local_script_path, normalized_script.as_bytes()) {
+            return empty_result(format!("写入本地探测脚本失败: {}", error));
+        }
+
+        let local_script = local_script_path.to_string_lossy().to_string();
+        match adb_push_internal(&state, &local_script, &remote_script) {
+            Ok(result) if result.success => {}
+            Ok(result) => {
+                let _ = std::fs::remove_file(&local_script_path);
+                return empty_result(result.error.unwrap_or_else(|| "推送探测脚本失败".to_string()));
             }
-
-            DeviceProbeResult {
-                success: true,
-                model,
-                virtual_size,
-                bits_per_pixel,
-                mipi_mode,
-                mipi_lanes,
-                fb0_available,
-                vismpwr_available,
-                python3_available,
-                cpu_usage,
-                memory_usage,
-                temperature_c,
-                error: None,
+            Err(error) => {
+                let _ = std::fs::remove_file(&local_script_path);
+                return empty_result(error);
             }
         }
-        Ok(result) => DeviceProbeResult {
-            success: false,
-            model: None,
-            virtual_size: None,
-            bits_per_pixel: None,
-            mipi_mode: None,
-            mipi_lanes: None,
-            fb0_available: false,
-            vismpwr_available: false,
-            python3_available: false,
-            cpu_usage: None,
-            memory_usage: None,
-            temperature_c: None,
-            error: result.error.or(Some("ADB 设备探测失败".to_string())),
-        },
-        Err(error) => DeviceProbeResult {
-            success: false,
-            model: None,
-            virtual_size: None,
-            bits_per_pixel: None,
-            mipi_mode: None,
-            mipi_lanes: None,
-            fb0_available: false,
-            vismpwr_available: false,
-            python3_available: false,
-            cpu_usage: None,
-            memory_usage: None,
-            temperature_c: None,
-            error: Some(error),
-        },
+
+        match run_adb(&["-s", &device_id, "shell", "chmod", "755", &remote_script]) {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let _ = std::fs::remove_file(&local_script_path);
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return empty_result(if stderr.is_empty() {
+                    "设置探测脚本权限失败".to_string()
+                } else {
+                    format!("设置探测脚本权限失败: {}", stderr)
+                });
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&local_script_path);
+                return empty_result(error);
+            }
+        }
+
+        let _ = std::fs::remove_file(&local_script_path);
+    }
+
+    let output = match run_adb(&["-s", &device_id, "shell", "sh", &remote_script]) {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).to_string(),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return empty_result(if !stderr.is_empty() {
+                format!("ADB 设备探测失败: {}", stderr)
+            } else if !stdout.is_empty() {
+                format!("ADB 设备探测失败: {}", stdout)
+            } else {
+                "ADB 设备探测失败".to_string()
+            });
+        }
+        Err(error) => return empty_result(error),
+    };
+
+    let mut model = None;
+    let mut virtual_size = None;
+    let mut bits_per_pixel = None;
+    let mut mipi_mode = None;
+    let mut mipi_lanes: Option<u32> = None;
+    let mut fb0_available = false;
+    let mut vismpwr_available = false;
+    let mut python3_available = false;
+    let mut cpu_usage = None;
+    let mut memory_usage = None;
+    let mut temperature_c = None;
+
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix("MIPI_MODE=") {
+            if !value.trim().is_empty() {
+                mipi_mode = Some(value.trim().to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("MODEL=") {
+            if !value.trim().is_empty() {
+                model = Some(value.trim().to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("VSIZE=") {
+            if !value.trim().is_empty() {
+                virtual_size = Some(value.trim().to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("BPP=") {
+            if !value.trim().is_empty() {
+                bits_per_pixel = Some(value.trim().to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("LANES=") {
+            let trimmed = value.trim();
+            if let Ok(parsed) = trimmed.parse::<u32>() {
+                if parsed > 0 {
+                    mipi_lanes = Some(parsed);
+                }
+            }
+        } else if let Some(value) = line.strip_prefix("FB0=") {
+            fb0_available = value.trim() == "1";
+        } else if let Some(value) = line.strip_prefix("VISMPWR=") {
+            vismpwr_available = value.trim() == "1";
+        } else if let Some(value) = line.strip_prefix("PYTHON3=") {
+            python3_available = value.trim() == "1";
+        } else if let Some(value) = line.strip_prefix("CPU=") {
+            if !value.trim().is_empty() {
+                cpu_usage = Some(value.trim().to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("MEM=") {
+            if !value.trim().is_empty() {
+                memory_usage = Some(value.trim().to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("TEMP=") {
+            if !value.trim().is_empty() {
+                temperature_c = Some(format!("{}°C", value.trim()));
+            }
+        }
+    }
+
+    if model.is_none()
+        && virtual_size.is_none()
+        && bits_per_pixel.is_none()
+        && mipi_mode.is_none()
+        && mipi_lanes.is_none()
+        && !fb0_available
+        && !vismpwr_available
+        && !python3_available
+        && cpu_usage.is_none()
+        && memory_usage.is_none()
+        && temperature_c.is_none()
+    {
+        return empty_result("设备探测脚本执行完成，但未返回有效信息".to_string());
+    }
+
+    DeviceProbeResult {
+        success: true,
+        model,
+        virtual_size,
+        bits_per_pixel,
+        mipi_mode,
+        mipi_lanes,
+        fb0_available,
+        vismpwr_available,
+        python3_available,
+        cpu_usage,
+        memory_usage,
+        temperature_c,
+        error: None,
     }
 }
 

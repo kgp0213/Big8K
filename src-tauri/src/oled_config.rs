@@ -1,29 +1,11 @@
 use serde::Deserialize;
 use std::path::Path;
-use std::sync::Mutex;
 
-use crate::{
-    adb_push_internal, adb_shell_internal, ConnectionState, DownloadOledConfigRequest, GenericResult,
-    LegacyLcdConfigResult, LegacyTimingConfig, TimingBinRequest,
+use crate::{DownloadOledConfigRequest, GenericResult, LegacyLcdConfigResult, LegacyTimingConfig, TimingBinRequest};
+use crate::openclaw_actions::{
+    download_oled_config_and_reboot_action, export_oled_config_json_action,
+    generate_timing_bin_action, generic_result_from_openclaw,
 };
-
-fn write_entry(buffer: &mut Vec<u8>, offset: u32, length: u32) {
-    buffer.extend_from_slice(&offset.to_le_bytes());
-    buffer.extend_from_slice(&length.to_le_bytes());
-}
-
-fn align(size: usize, alignment: usize) -> usize {
-    (size + alignment - 1) & !(alignment - 1)
-}
-
-fn parse_hex_csv_line(line: &str) -> Result<Vec<u8>, String> {
-    let bytes: Result<Vec<u8>, String> = line
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|part| !part.trim().is_empty())
-        .map(|part| u8::from_str_radix(part.trim(), 16).map_err(|_| format!("初始化代码字节解析失败: {}", part.trim())))
-        .collect();
-    bytes
-}
 
 fn parse_legacy_lcd_bin_file(path: &str) -> Result<LegacyLcdConfigResult, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("读取点屏配置失败: {}", e))?;
@@ -224,179 +206,7 @@ pub fn parse_legacy_lcd_bin(path: String) -> LegacyLcdConfigResult {
 
 #[tauri::command]
 pub fn generate_timing_bin(request: TimingBinRequest) -> GenericResult {
-    let exe = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(err) => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("无法定位程序目录: {}", err)),
-            };
-        }
-    };
-    let dir = match exe.parent() {
-        Some(dir) => dir,
-        None => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some("无法定位程序目录".to_string()),
-            };
-        }
-    };
-    let output_path = dir.join("vis-timing.bin");
-
-    let mut init_seq: Vec<u8> = Vec::new();
-    for line in request.init_codes.iter().filter(|line| !line.trim().is_empty()) {
-        match parse_hex_csv_line(line) {
-            Ok(bytes) => {
-                if bytes.len() < 3 {
-                    return GenericResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!("初始化代码长度不足(至少3字节): {}", line)),
-                    };
-                }
-                init_seq.extend_from_slice(&bytes);
-            }
-            Err(err) => {
-                return GenericResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(err),
-                };
-            }
-        }
-    }
-
-    let header_size = 96usize;
-    let timing_size = 48usize;
-    let init_seq_size = init_seq.len();
-    let exit_seq: [u8; 8] = [0x05, 0x78, 0x01, 0x28, 0x05, 0x00, 0x01, 0x10];
-    let vesa_dsc_size = 16usize;
-    let other_info_size = 16usize;
-
-    let timing_offset = align(header_size, 16);
-    let init_seq_offset = timing_offset + timing_size;
-    let exit_seq_offset = init_seq_offset + init_seq_size;
-    let vesa_dsc_offset = exit_seq_offset + exit_seq.len();
-    let other_info_offset = vesa_dsc_offset + vesa_dsc_size;
-    let total_size = other_info_offset + other_info_size;
-
-    let mut out: Vec<u8> = Vec::with_capacity(total_size);
-    out.extend_from_slice(&0xA5A55A5Au32.to_le_bytes());
-    let mut panel_vendor = [0u8; 16];
-    panel_vendor[..16].copy_from_slice(b"Visonox890123456");
-    out.extend_from_slice(&panel_vendor);
-    let mut panel_name = [0u8; 16];
-    panel_name[..16].copy_from_slice(b"DSI-Panel0123456");
-    out.extend_from_slice(&panel_name);
-    let mut version = [0u8; 8];
-    version.copy_from_slice(b"1.234567");
-    out.extend_from_slice(&version);
-
-    write_entry(&mut out, timing_offset as u32, timing_size as u32);
-    write_entry(&mut out, init_seq_offset as u32, init_seq_size as u32);
-    write_entry(&mut out, exit_seq_offset as u32, exit_seq.len() as u32);
-    write_entry(&mut out, 0, 0);
-    write_entry(&mut out, vesa_dsc_offset as u32, vesa_dsc_size as u32);
-    write_entry(&mut out, other_info_offset as u32, other_info_size as u32);
-    out.extend_from_slice(&(total_size as u32).to_le_bytes());
-
-    while out.len() < timing_offset {
-        out.push(0);
-    }
-
-    let pclk_hz = if request.pclk >= 1_000_000 {
-        request.pclk
-    } else {
-        request.pclk.saturating_mul(1000)
-    };
-    out.extend_from_slice(&pclk_hz.to_le_bytes());
-    out.extend_from_slice(&request.hact.to_le_bytes());
-    out.extend_from_slice(&request.hfp.to_le_bytes());
-    out.extend_from_slice(&request.hbp.to_le_bytes());
-    out.extend_from_slice(&request.hsync.to_le_bytes());
-    out.extend_from_slice(&request.vact.to_le_bytes());
-    out.extend_from_slice(&request.vfp.to_le_bytes());
-    out.extend_from_slice(&request.vbp.to_le_bytes());
-    out.extend_from_slice(&request.vsync.to_le_bytes());
-
-    let mut display_flags: u32 = 0;
-    display_flags |= if request.hs_polarity { 1 << 1 } else { 1 << 0 };
-    display_flags |= if request.vs_polarity { 1 << 3 } else { 1 << 2 };
-    display_flags |= if request.de_polarity { 1 << 5 } else { 1 << 4 };
-    display_flags |= if request.clk_polarity { 1 << 7 } else { 1 << 6 };
-    out.extend_from_slice(&display_flags.to_le_bytes());
-    out.extend_from_slice(&[0u8; 4]);
-
-    out.extend_from_slice(&init_seq);
-    out.extend_from_slice(&exit_seq);
-
-    let phy_mode = if request.phy_mode.eq_ignore_ascii_case("CPHY") {
-        1u8
-    } else {
-        0u8
-    };
-    let (ver_major, ver_minor) = if request.dsc_version.contains("1.2") {
-        (1u8, 2u8)
-    } else {
-        (1u8, 1u8)
-    };
-    out.push(phy_mode);
-    out.push(if request.scrambling_enable { 1 } else { 0 });
-    out.push(if request.dsc_enable { 1 } else { 0 });
-    out.push(ver_major);
-    out.push(ver_minor);
-    out.extend_from_slice(&[0u8; 3]);
-    out.extend_from_slice(&request.slice_width.to_le_bytes());
-    out.extend_from_slice(&request.slice_height.to_le_bytes());
-
-    let mut mipi_mode_video_type: u16 = 0;
-    if request.mipi_mode.eq_ignore_ascii_case("Video") {
-        mipi_mode_video_type |= 1 << 0;
-        if request.video_type.eq_ignore_ascii_case("NON_BURST_SYNC_PULSES") {
-            mipi_mode_video_type |= 1 << 2;
-        } else if request.video_type.eq_ignore_ascii_case("BURST_MODE") {
-            mipi_mode_video_type |= 1 << 1;
-        }
-    }
-    mipi_mode_video_type |= 1 << 11;
-    mipi_mode_video_type |= 1 << 9;
-    out.push((mipi_mode_video_type & 0xFF) as u8);
-    out.push(((mipi_mode_video_type >> 8) & 0xFF) as u8);
-    out.push(if request.data_swap { 1 } else { 0 });
-    let interface_type = match request.interface_type.as_str() {
-        "EDP" => 1u8,
-        "DP" => 2u8,
-        _ => 0u8,
-    };
-    out.push(interface_type);
-    let format_type = match request.format.as_str() {
-        "RGB888" => 0u8,
-        "RGB666" => 1u8,
-        "RGB666_PACKED" => 2u8,
-        "RGB565" => 3u8,
-        _ => 0u8,
-    };
-    out.push(format_type);
-    out.push(request.lanes);
-    out.push(phy_mode);
-    out.extend_from_slice(&[0x56, 0x69, 0x73]);
-    out.extend_from_slice(&[0u8; 6]);
-
-    match std::fs::write(&output_path, out) {
-        Ok(_) => GenericResult {
-            success: true,
-            output: output_path.to_string_lossy().to_string(),
-            error: None,
-        },
-        Err(err) => GenericResult {
-            success: false,
-            output: String::new(),
-            error: Some(format!("写入 timing bin 失败: {}", err)),
-        },
-    }
+    generic_result_from_openclaw(generate_timing_bin_action(&request))
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,114 +216,33 @@ pub struct ExportOledConfigJsonRequest {
 
 #[tauri::command]
 pub fn export_oled_config_json(payload: ExportOledConfigJsonRequest) -> GenericResult {
-    let path = match rfd::FileDialog::new()
-        .add_filter("OLED config json", &["json"])
-        .set_file_name("oled-config.json")
-        .save_file()
-    {
-        Some(path) => path,
-        None => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some("已取消导出 OLED 配置 JSON".to_string()),
-            };
-        }
+    let result = export_oled_config_json_action(&payload.request);
+    let exported_path = if result.success {
+        result.data.clone()
+    } else {
+        None
     };
-
-    let mut export_request = payload.request;
-    if export_request.pclk < 1_000_000 {
-        export_request.pclk = export_request.pclk.saturating_mul(1000);
+    let mut legacy = generic_result_from_openclaw(result);
+    if let Some(path) = exported_path {
+        legacy.output = format!("已导出 OLED 配置 JSON: {}；vis-timing.bin 默认保存在程序目录", path);
     }
-
-    let json = match serde_json::to_string_pretty(&export_request) {
-        Ok(json) => json,
-        Err(err) => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("序列化 OLED 配置 JSON 失败: {}", err)),
-            };
-        }
-    };
-
-    if let Err(err) = std::fs::write(&path, json) {
-        return GenericResult {
-            success: false,
-            output: String::new(),
-            error: Some(format!("写入 OLED 配置 JSON 失败: {}", err)),
-        };
-    }
-
-    GenericResult {
-        success: true,
-        output: format!("已导出 OLED 配置 JSON: {}；vis-timing.bin 默认保存在程序目录", path.display()),
-        error: None,
-    }
+    legacy
 }
 
 #[tauri::command]
 pub fn download_oled_config_and_reboot(
     payload: DownloadOledConfigRequest,
-    state: tauri::State<Mutex<ConnectionState>>,
+    state: tauri::State<std::sync::Mutex<crate::ConnectionState>>,
 ) -> GenericResult {
-    let generated = generate_timing_bin(payload.request);
-    if !generated.success {
-        return generated;
+    let result = download_oled_config_and_reboot_action(&payload.request, &state);
+    let local_path = if result.success {
+        result.data.clone()
+    } else {
+        None
+    };
+    let mut legacy = generic_result_from_openclaw(result);
+    if let Some(path) = local_path {
+        legacy.output = format!("初始化配置下载完成并重启设备：{}", path);
     }
-
-    let local_path = generated.output.clone();
-    match adb_push_internal(&state, &local_path, "/vismm/vis-timing.bin") {
-        Ok(result) if result.success => {}
-        Ok(result) => {
-            return GenericResult {
-                success: false,
-                output: result.output,
-                error: result.error.or(Some("初始化配置下载失败：push 失败".to_string())),
-            };
-        }
-        Err(error) => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some(error),
-            };
-        }
-    }
-
-    match adb_shell_internal(&state, "/vismm/tools/repack_initrd.sh && sync") {
-        Ok(result) if result.success => {}
-        Ok(result) => {
-            return GenericResult {
-                success: false,
-                output: result.output,
-                error: result.error.or(Some("repack_initrd 执行失败".to_string())),
-            };
-        }
-        Err(error) => {
-            return GenericResult {
-                success: false,
-                output: String::new(),
-                error: Some(error),
-            };
-        }
-    }
-
-    match adb_shell_internal(&state, "reboot") {
-        Ok(result) if result.success => GenericResult {
-            success: true,
-            output: format!("初始化配置下载完成并重启设备：{}", local_path),
-            error: None,
-        },
-        Ok(result) => GenericResult {
-            success: false,
-            output: result.output,
-            error: result.error.or(Some("设备重启失败".to_string())),
-        },
-        Err(error) => GenericResult {
-            success: false,
-            output: String::new(),
-            error: Some(error),
-        },
-    }
+    legacy
 }
