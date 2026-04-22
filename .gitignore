@@ -29,7 +29,8 @@ examples/
 python/debug_cache_pull/
 python/debug_cache_pull2/
 
-# Generated helper files that are not required to build from source
+# Rust / Tauri build artifacts
+src-tauri/target/
 src-tauri/gen/
 src-tauri/*.txt
 src-tauri/*.json
