@@ -56,3 +56,8 @@ vite_run.log
 /.understand-anything/
 /.workbuddy/
 /docs/ca-sdk2_en-US.pdf
+
+# Local assistant/workflow caches and archives
+/.claude/
+*.zip
+/skill/
