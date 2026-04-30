@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 type Props = {
   grayButtons: number[];
   selectedLogicPattern: number;
@@ -9,6 +11,7 @@ type Props = {
   onSleepIn: () => void | Promise<void>;
   onSleepOut: () => void | Promise<void>;
   onSoftwareReset: () => void | Promise<void>;
+  onReadVismpwrVersion: () => void | Promise<void>;
   onReadStatus: () => void | Promise<void>;
 };
 
@@ -23,15 +26,53 @@ export default function QuickActionsPanel({
   onSleepIn,
   onSleepOut,
   onSoftwareReset,
+  onReadVismpwrVersion,
   onReadStatus,
 }: Props) {
-  const confirmAndRun = async (message: string, action: () => void | Promise<void>) => {
-    if (!window.confirm(message)) return;
-    await action();
+  const [confirmAction, setConfirmAction] = useState<null | { message: string; action: () => void | Promise<void> }>(null);
+  const [confirmRunning, setConfirmRunning] = useState(false);
+
+  const confirmAndRun = (message: string, action: () => void | Promise<void>) => {
+    setConfirmAction({ message, action });
+  };
+
+  const closeConfirm = () => {
+    if (confirmRunning) return;
+    setConfirmAction(null);
+  };
+
+  const runConfirmedAction = async () => {
+    if (!confirmAction || confirmRunning) return;
+    setConfirmRunning(true);
+    try {
+      await confirmAction.action();
+      setConfirmAction(null);
+    } finally {
+      setConfirmRunning(false);
+    }
   };
 
   return (
-    <div className="panel">
+    <>
+      {confirmAction ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" onClick={closeConfirm} />
+          <div className="relative w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+            <div className="text-base font-semibold text-gray-900 dark:text-gray-100">确认操作</div>
+            <div className="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">{confirmAction.message}</div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={closeConfirm} disabled={confirmRunning} className="btn-secondary px-4 py-2 text-sm disabled:opacity-60">
+                取消
+              </button>
+              <button onClick={() => void runConfirmedAction()} disabled={confirmRunning} className="btn-danger px-4 py-2 text-sm disabled:opacity-60">
+                {confirmRunning ? "执行中..." : "确认执行"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="panel">
       <div className="panel-header">快捷命令</div>
       <div className="panel-body space-y-4">
         <div className="grid grid-cols-3 gap-2">
@@ -92,9 +133,16 @@ export default function QuickActionsPanel({
             >
               Software Reset (01)
             </button>
+            <button
+              onClick={() => void onReadVismpwrVersion()}
+              className="col-span-2 rounded-lg border border-red-300 dark:border-red-700 bg-white/80 dark:bg-gray-900/30 px-3 py-1.5 text-sm text-red-700 dark:text-red-300 hover:bg-white dark:hover:bg-gray-900/50"
+            >
+              读取 vismpwr 版本
+            </button>
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

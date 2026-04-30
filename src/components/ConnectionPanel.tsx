@@ -233,7 +233,7 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
     }
   };
 
-  const applyAdbState = async (devices: AdbDevice[]) => {
+  const applyAdbState = async (devices: AdbDevice[], silent = false) => {
     if (devices.length === 0) {
       setAdbConnected(false);
       setDeviceId("");
@@ -248,7 +248,7 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
     setDeviceId(selected.id);
     setAdbConnected(selected.status === "device");
     if (selected.status === "device") {
-      await probeAdbDevice(selected.id, true);
+      await probeAdbDevice(selected.id, silent);
     } else {
       setConnection({ type: "adb", deviceId: selected.id, connected: false });
     }
@@ -269,7 +269,7 @@ export default function ConnectionPanel({ logs, clearLogs }: ConnectionPanelProp
       const devices = Array.isArray(result?.devices) ? result.devices : [];
 
       if (result.success) {
-        await applyAdbState(devices);
+        await applyAdbState(devices, silent);
 
         if (!silent) {
           if (devices.length > 0) {

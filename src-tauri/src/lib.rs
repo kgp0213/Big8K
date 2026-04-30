@@ -351,8 +351,46 @@ impl Default for ConnectionState {
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+fn bundled_adb_path() -> Result<PathBuf, String> {
+    let adb_name = if cfg!(target_os = "windows") { "adb.exe" } else { "adb" };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("resources").join(adb_name));
+            candidates.push(exe_dir.join("_up_").join("resources").join(adb_name));
+            if let Some(parent) = exe_dir.parent() {
+                candidates.push(parent.join("resources").join(adb_name));
+            }
+        }
+    }
+
+    candidates.push(project_root().join("resources").join(adb_name));
+    candidates.push(PathBuf::from("resources").join(adb_name));
+
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(format!(
+        "未找到随包 ADB：请确认 resources\\{} 与 AdbWinApi.dll、AdbWinUsbApi.dll 已随程序发布",
+        adb_name
+    ))
+}
+
+fn adb_command() -> Result<Command, String> {
+    let adb_path = bundled_adb_path()?;
+    let mut command = Command::new(&adb_path);
+    if let Some(parent) = adb_path.parent() {
+        command.current_dir(parent);
+    }
+    Ok(command)
+}
+
 fn run_adb(args: &[&str]) -> Result<std::process::Output, String> {
-    let mut command = Command::new("adb");
+    let mut command = adb_command()?;
     command.args(args);
 
     #[cfg(target_os = "windows")]
@@ -362,11 +400,11 @@ fn run_adb(args: &[&str]) -> Result<std::process::Output, String> {
 
     command
         .output()
-        .map_err(|e| format!("执行 adb 失败: {}。请确认 adb 已安装并加入 PATH", e))
+        .map_err(|e| format!("执行随包 adb 失败: {}。请确认 resources 目录包含 adb.exe 及其 DLL 依赖", e))
 }
 
 pub(crate) fn run_adb_nowait(args: &[&str]) -> Result<(), String> {
-    let mut command = Command::new("adb");
+    let mut command = adb_command()?;
     command.args(args);
     command.stdout(Stdio::null()).stderr(Stdio::null());
 
@@ -378,7 +416,7 @@ pub(crate) fn run_adb_nowait(args: &[&str]) -> Result<(), String> {
     command
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("执行 adb 后台命令失败: {}。请确认 adb 已安装并加入 PATH", e))
+        .map_err(|e| format!("执行随包 adb 后台命令失败: {}。请确认 resources 目录包含 adb.exe 及其 DLL 依赖", e))
 }
 
 fn parse_adb_devices(stdout: &str) -> Vec<AdbDevice> {
@@ -974,66 +1012,54 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
         Err(error) => return empty_result(error),
     };
 
-    let remote_dir = "/vismm/python-script";
+    let remote_dir = "/dev/shm";
     let remote_script = format!("{}/probe_device_{}.sh", remote_dir, PROBE_SCRIPT_VERSION);
 
-    match run_adb(&["-s", &device_id, "shell", "mkdir", "-p", remote_dir]) {
+    match run_adb(&["-s", &device_id, "shell", "test", "-d", remote_dir]) {
+        Ok(output) if output.status.success() => {}
+        Ok(_) => return empty_result(format!("探测脚本临时目录不可用: {}", remote_dir)),
+        Err(error) => return empty_result(error),
+    }
+
+    // Always refresh the probe script. Older/missing remote scripts caused the UI to show
+    // "未读取" even though the bundled probe script itself was valid.
+    let local_script_path = std::env::temp_dir().join(format!("probe_device_{}.sh", PROBE_SCRIPT_VERSION));
+    let normalized_script = PROBE_SCRIPT_BODY.replace("\r\n", "\n").replace('\r', "\n");
+    if let Err(error) = std::fs::write(&local_script_path, normalized_script.as_bytes()) {
+        return empty_result(format!("写入本地探测脚本失败: {}", error));
+    }
+
+    let local_script = local_script_path.to_string_lossy().to_string();
+    match adb_push_internal(&state, &local_script, &remote_script) {
+        Ok(result) if result.success => {}
+        Ok(result) => {
+            let _ = std::fs::remove_file(&local_script_path);
+            return empty_result(result.error.unwrap_or_else(|| "推送探测脚本失败".to_string()));
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&local_script_path);
+            return empty_result(error);
+        }
+    }
+
+    match run_adb(&["-s", &device_id, "shell", "chmod", "755", &remote_script]) {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
+            let _ = std::fs::remove_file(&local_script_path);
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return empty_result(if stderr.is_empty() {
-                "创建设备探测脚本目录失败".to_string()
+                "设置探测脚本权限失败".to_string()
             } else {
-                format!("创建设备探测脚本目录失败: {}", stderr)
+                format!("设置探测脚本权限失败: {}", stderr)
             });
         }
-        Err(error) => return empty_result(error),
+        Err(error) => {
+            let _ = std::fs::remove_file(&local_script_path);
+            return empty_result(error);
+        }
     }
 
-    let script_exists = match run_adb(&["-s", &device_id, "shell", "test", "-f", &remote_script]) {
-        Ok(output) => output.status.success(),
-        Err(error) => return empty_result(error),
-    };
-
-    if !script_exists {
-        let local_script_path = std::env::temp_dir().join(format!("probe_device_{}.sh", PROBE_SCRIPT_VERSION));
-        let normalized_script = PROBE_SCRIPT_BODY.replace("\r\n", "\n").replace('\r', "\n");
-        if let Err(error) = std::fs::write(&local_script_path, normalized_script.as_bytes()) {
-            return empty_result(format!("写入本地探测脚本失败: {}", error));
-        }
-
-        let local_script = local_script_path.to_string_lossy().to_string();
-        match adb_push_internal(&state, &local_script, &remote_script) {
-            Ok(result) if result.success => {}
-            Ok(result) => {
-                let _ = std::fs::remove_file(&local_script_path);
-                return empty_result(result.error.unwrap_or_else(|| "推送探测脚本失败".to_string()));
-            }
-            Err(error) => {
-                let _ = std::fs::remove_file(&local_script_path);
-                return empty_result(error);
-            }
-        }
-
-        match run_adb(&["-s", &device_id, "shell", "chmod", "755", &remote_script]) {
-            Ok(output) if output.status.success() => {}
-            Ok(output) => {
-                let _ = std::fs::remove_file(&local_script_path);
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                return empty_result(if stderr.is_empty() {
-                    "设置探测脚本权限失败".to_string()
-                } else {
-                    format!("设置探测脚本权限失败: {}", stderr)
-                });
-            }
-            Err(error) => {
-                let _ = std::fs::remove_file(&local_script_path);
-                return empty_result(error);
-            }
-        }
-
-        let _ = std::fs::remove_file(&local_script_path);
-    }
+    let _ = std::fs::remove_file(&local_script_path);
 
     let output = match run_adb(&["-s", &device_id, "shell", "sh", &remote_script]) {
         Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).to_string(),
@@ -1126,7 +1152,12 @@ fn adb_probe_device(state: tauri::State<Mutex<ConnectionState>>) -> DeviceProbeR
         && memory_usage.is_none()
         && temperature_c.is_none()
     {
-        return empty_result("设备探测脚本执行完成，但未返回有效信息".to_string());
+        let raw_output = output.trim();
+        return empty_result(if raw_output.is_empty() {
+            "设备探测脚本执行完成，但未返回有效信息：stdout 为空".to_string()
+        } else {
+            format!("设备探测脚本执行完成，但未返回有效信息。原始输出: {}", raw_output)
+        });
     }
 
     DeviceProbeResult {

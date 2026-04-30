@@ -1,4 +1,4 @@
-# Big8K-Tauri-UI Release Build Script
+﻿# Big8K-Tauri-UI Release Build Script
 # Run from project root: .\build-release.ps1
 $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
@@ -23,6 +23,19 @@ Write-Host "cargo: $(cargo --version)"
 # Build
 Write-Host "`nStarting Tauri release build... (this may take 10-20 minutes for first build)" -ForegroundColor Yellow
 npm run tauri build -- --bundles nsis
+
+# Ensure the standalone release exe can always find bundled ADB next to itself.
+$ReleaseResources = Join-Path $ProjectRoot "src-tauri\target\release\resources"
+$ProjectResources = Join-Path $ProjectRoot "resources"
+New-Item -ItemType Directory -Force -Path $ReleaseResources | Out-Null
+foreach ($name in @("adb.exe", "AdbWinUsbApi.dll", "AdbWinApi.dll")) {
+    $src = Join-Path $ProjectResources $name
+    if (Test-Path $src) {
+        Copy-Item $src (Join-Path $ReleaseResources $name) -Force
+    } else {
+        Write-Host "WARNING: missing bundled ADB resource: $src" -ForegroundColor Yellow
+    }
+}
 
 if ($LASTEXITCODE -eq 0) {
     $exePath = Join-Path $ProjectRoot "src-tauri\target\release\Big8K.exe"

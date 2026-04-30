@@ -62,6 +62,7 @@ export default function MipiTab() {
   const [showRecentConfigs, setShowRecentConfigs] = useState(false);
   const recentConfigMenuRef = useRef<HTMLDivElement | null>(null);
   const recentConfigCloseTimerRef = useRef<number | null>(null);
+  const [vismpwrUpdatePrompt, setVismpwrUpdatePrompt] = useState(false);
 
   const updateTiming = <K extends keyof TimingConfig>(key: K, value: TimingConfig[K]) => {
     setTiming((prev) => ({ ...prev, [key]: value }));
@@ -260,6 +261,43 @@ export default function MipiTab() {
     );
   };
 
+  const handleReadVismpwrVersion = async () => {
+    const command = "vismpwr --version 2>&1 || vismpwr -v 2>&1 || vismpwr version 2>&1 || vismpwr 2>&1";
+    appendLog("任务开始 -> 读取 vismpwr 版本", "info");
+    if (debugMode) {
+      appendLog(`-> adb shell ${command}`, "debug");
+    }
+
+    const showUpdatePrompt = (logMessage: string, level: "warning" | "error" = "warning") => {
+      appendLog(logMessage, level);
+      setVismpwrUpdatePrompt(true);
+    };
+
+    try {
+      const result = await tauriInvoke<{ success: boolean; output: string; error?: string }>("adb_shell", { command });
+      const text = (result.output || "").trim();
+      const errorText = (result.error || "").trim();
+      const combinedText = `${text}\n${errorText}`.toLowerCase();
+      const missingVismpwr =
+        combinedText.includes("command not found") ||
+        combinedText.includes("not found") ||
+        combinedText.includes("no such file") ||
+        combinedText.includes("not recognized") ||
+        combinedText.includes("not executable");
+      if (missingVismpwr) {
+        showUpdatePrompt("未读取到 vismpwr 版本号，请配置部署页面更新配置后重试。", "warning");
+      } else if (result.success && text) {
+        appendLog(`vismpwr 版本：${text}`, "success");
+      } else if (result.success) {
+        showUpdatePrompt("vismpwr 版本读取完成，但命令未返回版本信息");
+      } else {
+        showUpdatePrompt(errorText || text || "vismpwr 版本读取失败", "error");
+      }
+    } catch (error) {
+      showUpdatePrompt(`vismpwr 版本读取异常: ${String(error)}`, "error");
+    }
+  };
+
   const handleReadStatus = async () => {
     await handleReadStatusAction(appendLog);
   };
@@ -274,7 +312,25 @@ export default function MipiTab() {
   };
 
   return (
-    <div className="space-y-4">
+    <>
+      {vismpwrUpdatePrompt ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" onClick={() => setVismpwrUpdatePrompt(false)} />
+          <div className="relative w-full max-w-md rounded-2xl border border-amber-200 bg-white p-5 shadow-2xl dark:border-amber-800 dark:bg-gray-900">
+            <div className="text-base font-semibold text-amber-700 dark:text-amber-300">需要更新 vismpwr</div>
+            <div className="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">
+              未读取到版本号，请配置部署页面更新配置后重试。
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button onClick={() => setVismpwrUpdatePrompt(false)} className="btn-secondary px-4 py-2 text-sm">
+                我知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="space-y-4">
       <div className="panel">
         <div className="panel-header flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -369,12 +425,14 @@ export default function MipiTab() {
                 onSleepIn={handleSleepIn}
                 onSleepOut={handleSleepOut}
                 onSoftwareReset={handleSoftwareReset}
+                onReadVismpwrVersion={handleReadVismpwrVersion}
                 onReadStatus={handleReadStatus}
               />
             </div>
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }
