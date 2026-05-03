@@ -112,6 +112,8 @@ request = {
     "slice_height": 0,
     "scrambling_enable": False,
     "data_swap": False,
+    "panel_name": "M559-CMD4201",
+    "version": "26042221",
     "init_codes": [],
 }
 
@@ -177,6 +179,12 @@ print(download_oled_config_and_reboot(request))
 - `checkerboard`
 - `gradient`
 
-## 工作流
+### `play_video`
+- 传本地文件路径：会先上传到 `/vismm/fbshow/movie_online/` 再启动播放。
+- 传设备端绝对路径：直接按该路径启动播放（不上传）。
+
+### `panel_name` / `version`（timing bin）
+- `panel_name`：固定 16 字节（超长截断，不足补 `x`）
+- `version`：固定 8 字节，仅保留数字（超长截断，不足补 `x`）
 
 见 `workflows.yaml`，其中保留的是 P0 可直接落地的 OpenClaw 工作流，而不是旧的 CA410 测量工作流。

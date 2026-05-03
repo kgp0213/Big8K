@@ -144,6 +144,88 @@ class ScreenController:
             "script_path": str(script_path),
         }
 
+    def _logic_daemon_paths(self) -> Dict[str, str]:
+        return {
+            "script": "/vismm/fbshow/logic_pattern_daemon.py",
+            "cmd": "/dev/shm/logic_pattern_cmd",
+            "applied": "/dev/shm/logic_pattern_applied",
+            "stop": "/dev/shm/logic_pattern_stop",
+            "pid": "/dev/shm/logic_pattern_daemon.pid",
+            "ready": "/dev/shm/logic_pattern_daemon.ready",
+        }
+
+    def _ensure_logic_daemon_script(self) -> Dict:
+        required_scripts = [
+            self.deploy_root / "fb-operate" / "logicPictureShow.py",
+            self.deploy_root / "fb-operate" / "logic_pattern_daemon.py",
+        ]
+        for local_script in required_scripts:
+            if not local_script.exists():
+                return {
+                    "success": False,
+                    "error": f"Missing daemon dependency: {local_script}",
+                }
+
+        ensure_result = self._ensure_remote_dir("/vismm/fbshow")
+        if not ensure_result["success"]:
+            return ensure_result
+
+        for local_script in required_scripts:
+            push_result = self._push_required(local_script, f"/vismm/fbshow/{local_script.name}")
+            if not push_result["success"]:
+                return push_result
+
+        chmod_result = self._run_shell_required("chmod 755 /vismm/fbshow/logic_pattern_daemon.py /vismm/fbshow/logicPictureShow.py")
+        if not chmod_result["success"]:
+            return chmod_result
+
+        dependency_check = self._run_shell_required("cd /vismm/fbshow && python3 - <<'PY'\nimport numpy\nfrom logicPictureShow import InteractiveSystem\nPY", timeout=60)
+        if not dependency_check["success"]:
+            return {
+                "success": False,
+                "error": dependency_check.get("stderr") or dependency_check.get("stdout") or "logic daemon dependency check failed",
+            }
+
+        return {"success": True}
+
+    def _ensure_logic_daemon_running(self) -> Dict:
+        paths = self._logic_daemon_paths()
+
+        check_result = self._run_shell_required(
+            f"if [ -f {paths['pid']} ] && kill -0 $(cat {paths['pid']}) 2>/dev/null; then echo running; else echo stopped; fi",
+            timeout=30,
+        )
+        if not check_result["success"]:
+            return check_result
+
+        if "running" in check_result.get("stdout", ""):
+            return {"success": True, "running": True}
+
+        # Start daemon in background on device
+        start_cmd = (
+            "sh -c \"rm -f /dev/shm/logic_pattern_stop /dev/shm/logic_pattern_daemon.ready "
+            "/dev/shm/logic_pattern_applied; "
+            "nohup /usr/bin/python3 /vismm/fbshow/logic_pattern_daemon.py >/dev/shm/logic_pattern_daemon.start.log 2>&1 &\""
+        )
+        start_result = self._run_shell_required(start_cmd, timeout=30)
+        if not start_result["success"]:
+            return start_result
+
+        # Wait for ready flag; Python imports and framebuffer initialization are slow on the board.
+        wait_result = self._run_shell_required(
+            f"for i in $(seq 1 100); do [ -f {paths['ready']} ] && echo ready && exit 0; sleep 0.05; done; cat /dev/shm/logic_pattern_daemon.start.log 2>/dev/null; echo not_ready; exit 1",
+            timeout=30,
+        )
+        if not wait_result["success"]:
+            return {
+                "success": False,
+                "error": "logic daemon start timeout",
+                "stdout": wait_result.get("stdout", ""),
+                "stderr": wait_result.get("stderr", ""),
+            }
+
+        return {"success": True, "running": True}
+
     def display_logic_pattern(self, pattern_id: int) -> Dict:
         if pattern_id < 0 or pattern_id > 39:
             return {
@@ -151,18 +233,52 @@ class ScreenController:
                 "error": "逻辑图案编号必须在 0-39 之间",
             }
 
-        result = self._run_shell_required(f"python3 /vismm/fbshow/logicPictureShow.py {pattern_id}", timeout=120)
-        if not result["success"]:
+        ensure_script = self._ensure_logic_daemon_script()
+        if not ensure_script["success"]:
             return {
                 "success": False,
-                "error": result["error"],
+                "error": ensure_script.get("error", "failed to prepare logic daemon script"),
                 "pattern_id": pattern_id,
+            }
+
+        ensure_running = self._ensure_logic_daemon_running()
+        if not ensure_running["success"]:
+            return {
+                "success": False,
+                "error": ensure_running.get("error", "failed to start logic daemon"),
+                "pattern_id": pattern_id,
+            }
+
+        paths = self._logic_daemon_paths()
+        write_result = self._run_shell_required(
+            f"echo {int(pattern_id)} > {paths['cmd']}",
+            timeout=30,
+        )
+        if not write_result["success"]:
+            return {
+                "success": False,
+                "error": write_result["error"],
+                "pattern_id": pattern_id,
+            }
+
+        # Wait for ack to guarantee command was received and applied.
+        ack_result = self._run_shell_required(
+            f"for i in $(seq 1 500); do [ -f {paths['applied']} ] && [ \"$(cat {paths['applied']})\" = \"{int(pattern_id)}\" ] && echo ok && exit 0; sleep 0.01; done; echo timeout; exit 1",
+            timeout=30,
+        )
+        if not ack_result["success"]:
+            return {
+                "success": False,
+                "error": "logic pattern apply timeout",
+                "pattern_id": pattern_id,
+                "stdout": ack_result.get("stdout", ""),
+                "stderr": ack_result.get("stderr", ""),
             }
 
         return {
             "success": True,
             "pattern_id": pattern_id,
-            "stdout": result.get("stdout", ""),
+            "stdout": write_result.get("stdout", ""),
         }
 
     def display_remote_image(self, remote_path: str) -> Dict:
@@ -247,13 +363,6 @@ class ScreenController:
                 "error": "Video path is empty",
             }
 
-        file_name = Path(input_path).name.strip()
-        if not file_name:
-            return {
-                "success": False,
-                "error": "Video file name is invalid",
-            }
-
         resolved = self.device.resolve_device_id()
         if not resolved["success"]:
             return {
@@ -261,7 +370,30 @@ class ScreenController:
                 "error": resolved.get("error", "No device selected"),
             }
 
-        remote_video_path = f"/vismm/fbshow/movie_online/{file_name}"
+        local_path = Path(input_path)
+        if local_path.exists():
+            file_name = local_path.name.strip()
+            if not file_name:
+                return {
+                    "success": False,
+                    "error": "Video file name is invalid",
+                }
+            ensure_result = self._ensure_remote_dir("/vismm/fbshow/movie_online")
+            if not ensure_result["success"]:
+                return {
+                    "success": False,
+                    "error": ensure_result["error"],
+                }
+            remote_video_path = f"/vismm/fbshow/movie_online/{file_name}"
+            push_result = self._push_required(local_path, remote_video_path)
+            if not push_result["success"]:
+                return {
+                    "success": False,
+                    "error": push_result["error"],
+                }
+        else:
+            remote_video_path = input_path
+
         nowait_result = self.device.run_nowait([
             "-s",
             resolved["device_id"],

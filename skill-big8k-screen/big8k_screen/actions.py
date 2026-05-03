@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -188,6 +189,19 @@ def _timing_bin_output_path() -> Path:
     return Path.cwd() / "vis-timing.bin"
 
 
+def _normalize_fixed_bytes(value: Optional[str], length: int, *, digits_only: bool = False, default: str = "") -> bytes:
+    text = (value or default).strip()
+    if digits_only:
+        text = "".join(ch for ch in text if ch.isdigit())
+    if not text:
+        text = default
+    if len(text) > length:
+        text = text[:length]
+    if len(text) < length:
+        text = text + ("x" * (length - len(text)))
+    return text.encode("ascii", errors="ignore")[:length].ljust(length, b"x")
+
+
 def _generate_timing_bin_file(request: Dict[str, Any]) -> Path:
     init_seq = bytearray()
     for line in request["init_codes"]:
@@ -213,9 +227,9 @@ def _generate_timing_bin_file(request: Dict[str, Any]) -> Path:
 
     out = bytearray()
     out.extend((0xA5A55A5A).to_bytes(4, "little"))
-    out.extend(b"Visonox890123456")
-    out.extend(b"DSI-Panel0123456")
-    out.extend(b"1.234567")
+    out.extend(_normalize_fixed_bytes("Visonox890123456", 16, default="Visonox890123456"))
+    out.extend(_normalize_fixed_bytes(request.get("panel_name"), 16, default="DSI-Panel0123456"))
+    out.extend(_normalize_fixed_bytes(request.get("version"), 8, digits_only=True, default=datetime.now().strftime("%y%m%d%H")))
 
     _write_entry(out, timing_offset, timing_size)
     _write_entry(out, init_seq_offset, len(init_seq))
@@ -229,7 +243,7 @@ def _generate_timing_bin_file(request: Dict[str, Any]) -> Path:
         out.append(0)
 
     pclk_hz = request["pclk"] if request["pclk"] >= 1_000_000 else request["pclk"] * 1000
-    out.extend(int(pclk_hz).to_bytes(4, "little"))
+    out.extend(int(pclk_hz).to_bytes(8, "little"))
     for field in ["hact", "hfp", "hbp", "hsync", "vact", "vfp", "vbp", "vsync"]:
         out.extend(int(request[field]).to_bytes(4, "little"))
 

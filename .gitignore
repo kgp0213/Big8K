@@ -62,3 +62,7 @@ vite_run.log
 /.claude/
 *.zip
 /skill/
+
+# Python process artifacts
+skill-big8k-screen/**/__pycache__/
+skill-big8k-screen/**/*.pyc

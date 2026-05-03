@@ -21,7 +21,7 @@ export const defaultTiming: TimingConfig = {
   format: "RGB888",
   phyMode: "DPHY",
   dscEnable: true,
-  dscVersion: "Ver1.1",
+  dscVersion: "Vesa1.1",
   sliceWidth: 1518,
   sliceHeight: 8,
   scramblingEnable: false,

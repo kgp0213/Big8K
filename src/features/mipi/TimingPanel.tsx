@@ -236,7 +236,7 @@ export default function TimingPanel({
             <div>
               <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">DSC Version</label>
               <div className="flex items-center gap-4 h-[38px]">
-                {radioOption("dscVersion", "Ver1.1", "Ver1.1")}
+                {radioOption("dscVersion", "Vesa1.1", "Ver1.1")}
                 {radioOption("dscVersion", "Vesa1.2", "Ver1.2")}
               </div>
             </div>
