@@ -6,14 +6,14 @@ use crate::{
     GenericResult, ImageDisplayFromBase64Request, ImageDisplayRequest, PatternResult,
     PlayVideoRequest, RuntimePatternRequest, VideoControlRequest, VideoPlaybackStatus,
 };
-use crate::openclaw_actions::{
+use crate::display_actions::{
     display_local_image_action, display_remote_image_action, display_runtime_pattern_action,
-    generic_result_from_openclaw, get_video_playback_status_action, play_video_action,
+    generic_result_from_action, get_video_playback_status_action, play_video_action,
     sync_runtime_patterns_action, video_control_action,
 };
-use crate::openclaw_types::OpenClawResult;
+use crate::action_result::ActionResult;
 
-fn pattern_result_from_openclaw(result: OpenClawResult<()>) -> PatternResult {
+fn pattern_result_from_action(result: ActionResult<()>) -> PatternResult {
     let error = result.error.map(|error| {
         format!("[{}:{}] {}", error.stage, error.code, error.message)
     });
@@ -70,7 +70,7 @@ pub fn display_remote_image(
     remote_image_path: String,
     state: tauri::State<Mutex<ConnectionState>>,
 ) -> PatternResult {
-    pattern_result_from_openclaw(display_remote_image_action(&remote_image_path, &state))
+    pattern_result_from_action(display_remote_image_action(&remote_image_path, &state))
 }
 
 #[tauri::command]
@@ -78,12 +78,12 @@ pub fn display_image(
     request: ImageDisplayRequest,
     state: tauri::State<Mutex<ConnectionState>>,
 ) -> PatternResult {
-    pattern_result_from_openclaw(display_local_image_action(&request, &state))
+    pattern_result_from_action(display_local_image_action(&request, &state))
 }
 
 #[tauri::command]
 pub fn sync_runtime_patterns(state: tauri::State<Mutex<ConnectionState>>) -> PatternResult {
-    pattern_result_from_openclaw(sync_runtime_patterns_action(&state))
+    pattern_result_from_action(sync_runtime_patterns_action(&state))
 }
 
 #[tauri::command]
@@ -91,7 +91,7 @@ pub fn run_runtime_pattern(
     request: RuntimePatternRequest,
     state: tauri::State<Mutex<ConnectionState>>,
 ) -> PatternResult {
-    pattern_result_from_openclaw(display_runtime_pattern_action(&request, &state))
+    pattern_result_from_action(display_runtime_pattern_action(&request, &state))
 }
 
 #[tauri::command]
@@ -99,7 +99,7 @@ pub fn play_video(
     request: PlayVideoRequest,
     state: tauri::State<Mutex<ConnectionState>>,
 ) -> GenericResult {
-    generic_result_from_openclaw(play_video_action(&request, &state))
+    generic_result_from_action(play_video_action(&request, &state))
 }
 
 #[tauri::command]
@@ -129,5 +129,5 @@ pub fn send_video_control(
     request: VideoControlRequest,
     state: tauri::State<Mutex<ConnectionState>>,
 ) -> GenericResult {
-    generic_result_from_openclaw(video_control_action(&request, &state))
+    generic_result_from_action(video_control_action(&request, &state))
 }

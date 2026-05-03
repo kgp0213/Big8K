@@ -5,16 +5,16 @@ use crate::{
     adb_push_internal, adb_shell_internal, resolve_device_id, run_adb_nowait, shell_quote,
     ConnectionState,
 };
-use crate::openclaw_types::OpenClawError;
+use crate::action_result::ActionError;
 
-fn map_transport_error(stage: &'static str, code: &'static str, message: String) -> OpenClawError {
+fn map_transport_error(stage: &'static str, code: &'static str, message: String) -> ActionError {
     let mapped_stage = if message.contains("未检测到 ADB 设备") || message.contains("获取 ADB 设备失败") {
         "device_resolution"
     } else {
         stage
     };
 
-    OpenClawError {
+    ActionError {
         stage: mapped_stage,
         code,
         message,
@@ -24,10 +24,10 @@ fn map_transport_error(stage: &'static str, code: &'static str, message: String)
 pub fn shell(
     state: &tauri::State<Mutex<ConnectionState>>,
     command: &str,
-) -> Result<String, OpenClawError> {
+) -> Result<String, ActionError> {
     match adb_shell_internal(state, command) {
         Ok(result) if result.success => Ok(result.output),
-        Ok(result) => Err(OpenClawError {
+        Ok(result) => Err(ActionError {
             stage: "adb_shell",
             code: "ADB_SHELL_FAILED",
             message: result.error.unwrap_or_else(|| {
@@ -46,10 +46,10 @@ pub fn push(
     state: &tauri::State<Mutex<ConnectionState>>,
     local_path: &str,
     remote_path: &str,
-) -> Result<String, OpenClawError> {
+) -> Result<String, ActionError> {
     match adb_push_internal(state, local_path, remote_path) {
         Ok(result) if result.success => Ok(result.output),
-        Ok(result) => Err(OpenClawError {
+        Ok(result) => Err(ActionError {
             stage: "adb_push",
             code: "ADB_PUSH_FAILED",
             message: result.error.unwrap_or_else(|| {
@@ -67,7 +67,7 @@ pub fn push(
 pub fn ensure_dir(
     state: &tauri::State<Mutex<ConnectionState>>,
     remote_dir: &str,
-) -> Result<(), OpenClawError> {
+) -> Result<(), ActionError> {
     shell(state, &format!("mkdir -p {}", remote_dir)).map(|_| ())
 }
 
@@ -76,7 +76,7 @@ pub fn run_python(
     local_script_path: &str,
     remote_script_path: &str,
     args: &[&str],
-) -> Result<String, OpenClawError> {
+) -> Result<String, ActionError> {
     push(state, local_script_path, remote_script_path)?;
 
     let mut command = format!("python3 {}", shell_quote(remote_script_path));
@@ -91,7 +91,7 @@ pub fn run_python(
         );
     }
 
-    shell(state, &command).map_err(|error| OpenClawError {
+    shell(state, &command).map_err(|error| ActionError {
         stage: "runtime_script",
         code: error.code,
         message: error.message,
@@ -103,7 +103,7 @@ pub fn run_project_python(
     project_script_path: &str,
     remote_script_path: &str,
     args: &[&str],
-) -> Result<String, OpenClawError> {
+) -> Result<String, ActionError> {
     run_python(state, &project_file(project_script_path), remote_script_path, args)
 }
 
@@ -112,7 +112,7 @@ pub fn run_video_nowait(
     remote_video_path: &str,
     zoom_mode: i32,
     show_framerate: i32,
-) -> Result<(), OpenClawError> {
+) -> Result<(), ActionError> {
     let device_id = resolve_device_id(state)
         .map_err(|error| map_transport_error("device_resolution", "DEVICE_RESOLUTION_FAILED", error))?;
 

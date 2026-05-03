@@ -2,9 +2,9 @@ use serde::Deserialize;
 use std::path::Path;
 
 use crate::{DownloadOledConfigRequest, GenericResult, LegacyLcdConfigResult, LegacyTimingConfig, TimingBinRequest};
-use crate::openclaw_actions::{
+use crate::display_actions::{
     download_oled_config_and_reboot_action, export_oled_config_json_action,
-    generate_timing_bin_action, generic_result_from_openclaw,
+    generate_timing_bin_action, generic_result_from_action,
 };
 
 fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
@@ -352,7 +352,7 @@ pub fn parse_legacy_lcd_bin(path: String) -> LegacyLcdConfigResult {
 
 #[tauri::command]
 pub fn generate_timing_bin(request: TimingBinRequest) -> GenericResult {
-    generic_result_from_openclaw(generate_timing_bin_action(&request))
+    generic_result_from_action(generate_timing_bin_action(&request))
 }
 
 #[derive(Debug, Deserialize)]
@@ -368,7 +368,7 @@ pub fn export_oled_config_json(payload: ExportOledConfigJsonRequest) -> GenericR
     } else {
         None
     };
-    let mut legacy = generic_result_from_openclaw(result);
+    let mut legacy = generic_result_from_action(result);
     if let Some(path) = exported_path {
         legacy.output = format!("已导出 OLED 配置 JSON: {}；vis-timing.bin 默认保存在程序目录", path);
     }
@@ -386,7 +386,7 @@ pub fn download_oled_config_and_reboot(
     } else {
         None
     };
-    let mut legacy = generic_result_from_openclaw(result);
+    let mut legacy = generic_result_from_action(result);
     if let Some(path) = local_path {
         legacy.output = format!("初始化配置下载完成并重启设备：{}", path);
     }

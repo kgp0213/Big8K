@@ -1,23 +1,23 @@
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OpenClawError {
+pub struct ActionError {
     pub stage: &'static str,
     pub code: &'static str,
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OpenClawResult<T> {
+pub struct ActionResult<T> {
     pub success: bool,
     pub data: Option<T>,
     pub warnings: Vec<String>,
     pub summary: String,
     pub next_suggestion: Option<String>,
-    pub error: Option<OpenClawError>,
+    pub error: Option<ActionError>,
 }
 
-impl<T> OpenClawResult<T> {
+impl<T> ActionResult<T> {
     pub fn ok(data: T, summary: impl Into<String>) -> Self {
         Self {
             success: true,
@@ -41,7 +41,7 @@ impl<T> OpenClawResult<T> {
             warnings: Vec::new(),
             summary: summary.into(),
             next_suggestion: None,
-            error: Some(OpenClawError {
+            error: Some(ActionError {
                 stage,
                 code,
                 message: message.into(),

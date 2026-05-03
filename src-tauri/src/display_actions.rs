@@ -7,17 +7,17 @@ use crate::{
     shell_quote, ImageDisplayRequest, PlayVideoRequest, RuntimePatternRequest, TimingBinRequest,
     VideoControlRequest, VideoPlaybackStatus,
 };
-use crate::openclaw_adapter::{ensure_dir, push, run_project_python, run_video_nowait, shell};
-use crate::openclaw_types::OpenClawResult;
+use crate::remote_runtime::{ensure_dir, push, run_project_python, run_video_nowait, shell};
+use crate::action_result::ActionResult;
 
-fn format_openclaw_error(stage: &str, code: &str, message: &str) -> String {
+fn format_action_error(stage: &str, code: &str, message: &str) -> String {
     format!("[{}:{}] {}", stage, code, message)
 }
 
-pub fn generic_result_from_openclaw<T>(result: OpenClawResult<T>) -> crate::GenericResult {
+pub fn generic_result_from_action<T>(result: ActionResult<T>) -> crate::GenericResult {
     let error = result
         .error
-        .map(|error| format_openclaw_error(error.stage, error.code, &error.message));
+        .map(|error| format_action_error(error.stage, error.code, &error.message));
 
     crate::GenericResult {
         success: result.success,
@@ -72,11 +72,11 @@ fn normalize_fixed_bytes(raw: Option<&str>, len: usize, pad: u8, digits_only: bo
     bytes
 }
 
-pub fn generate_timing_bin_action(request: &TimingBinRequest) -> OpenClawResult<String> {
+pub fn generate_timing_bin_action(request: &TimingBinRequest) -> ActionResult<String> {
     let output_path = match timing_bin_output_path() {
         Ok(path) => path,
         Err(message) => {
-            return OpenClawResult::fail(
+            return ActionResult::fail(
                 "resource_prepare",
                 "PROGRAM_DIR_RESOLVE_FAILED",
                 message,
@@ -90,7 +90,7 @@ pub fn generate_timing_bin_action(request: &TimingBinRequest) -> OpenClawResult<
         match parse_hex_csv_line(line) {
             Ok(bytes) => {
                 if bytes.len() < 3 {
-                    return OpenClawResult::fail(
+                    return ActionResult::fail(
                         "input_validation",
                         "INIT_CODE_TOO_SHORT",
                         format!("初始化代码长度不足(至少3字节): {}", line),
@@ -100,7 +100,7 @@ pub fn generate_timing_bin_action(request: &TimingBinRequest) -> OpenClawResult<
                 init_seq.extend_from_slice(&bytes);
             }
             Err(message) => {
-                return OpenClawResult::fail(
+                return ActionResult::fail(
                     "input_validation",
                     "INIT_CODE_PARSE_FAILED",
                     message,
@@ -237,11 +237,11 @@ pub fn generate_timing_bin_action(request: &TimingBinRequest) -> OpenClawResult<
     out.extend_from_slice(&[0u8; 6]);
 
     match std::fs::write(&output_path, out) {
-        Ok(_) => OpenClawResult::ok(
+        Ok(_) => ActionResult::ok(
             output_path.to_string_lossy().to_string(),
             format!("timing bin generated: {}", output_path.display()),
         ),
-        Err(err) => OpenClawResult::fail(
+        Err(err) => ActionResult::fail(
             "resource_prepare",
             "TIMING_BIN_WRITE_FAILED",
             format!("写入 timing bin 失败: {}", err),
@@ -250,7 +250,7 @@ pub fn generate_timing_bin_action(request: &TimingBinRequest) -> OpenClawResult<
     }
 }
 
-pub fn export_oled_config_json_action(request: &TimingBinRequest) -> OpenClawResult<String> {
+pub fn export_oled_config_json_action(request: &TimingBinRequest) -> ActionResult<String> {
     let path = match rfd::FileDialog::new()
         .add_filter("OLED config json", &["json"])
         .set_file_name("oled-config.json")
@@ -258,7 +258,7 @@ pub fn export_oled_config_json_action(request: &TimingBinRequest) -> OpenClawRes
     {
         Some(path) => path,
         None => {
-            return OpenClawResult::fail(
+            return ActionResult::fail(
                 "user_interaction",
                 "EXPORT_CANCELLED",
                 "已取消导出 OLED 配置 JSON",
@@ -275,7 +275,7 @@ pub fn export_oled_config_json_action(request: &TimingBinRequest) -> OpenClawRes
     let json = match serde_json::to_string_pretty(&export_request) {
         Ok(json) => json,
         Err(err) => {
-            return OpenClawResult::fail(
+            return ActionResult::fail(
                 "result_serialize",
                 "OLED_CONFIG_JSON_SERIALIZE_FAILED",
                 format!("序列化 OLED 配置 JSON 失败: {}", err),
@@ -285,11 +285,11 @@ pub fn export_oled_config_json_action(request: &TimingBinRequest) -> OpenClawRes
     };
 
     match std::fs::write(&path, json) {
-        Ok(_) => OpenClawResult::ok(
+        Ok(_) => ActionResult::ok(
             path.to_string_lossy().to_string(),
             format!("OLED config JSON exported: {}", path.display()),
         ),
-        Err(err) => OpenClawResult::fail(
+        Err(err) => ActionResult::fail(
             "resource_prepare",
             "OLED_CONFIG_JSON_WRITE_FAILED",
             format!("写入 OLED 配置 JSON 失败: {}", err),
@@ -301,12 +301,12 @@ pub fn export_oled_config_json_action(request: &TimingBinRequest) -> OpenClawRes
 pub fn download_oled_config_and_reboot_action(
     request: &TimingBinRequest,
     state: &tauri::State<Mutex<ConnectionState>>,
-) -> OpenClawResult<String> {
+) -> ActionResult<String> {
     let generated = generate_timing_bin_action(request);
     let local_path = match (generated.success, generated.data, generated.error) {
         (true, Some(path), _) => path,
         (_, _, Some(error)) => {
-            return OpenClawResult::fail(
+            return ActionResult::fail(
                 error.stage,
                 error.code,
                 error.message,
@@ -314,7 +314,7 @@ pub fn download_oled_config_and_reboot_action(
             )
         }
         _ => {
-            return OpenClawResult::fail(
+            return ActionResult::fail(
                 "config_generate",
                 "TIMING_BIN_EMPTY",
                 "timing bin 生成结果为空",
@@ -324,7 +324,7 @@ pub fn download_oled_config_and_reboot_action(
     };
 
     if let Err(error) = push(state, &local_path, "/vismm/vis-timing.bin") {
-        return OpenClawResult::fail(
+        return ActionResult::fail(
             error.stage,
             error.code,
             error.message,
@@ -333,7 +333,7 @@ pub fn download_oled_config_and_reboot_action(
     }
 
     if let Err(error) = shell(state, "/vismm/tools/repack_initrd.sh && sync") {
-        return OpenClawResult::fail(
+        return ActionResult::fail(
             error.stage,
             error.code,
             error.message,
@@ -342,7 +342,7 @@ pub fn download_oled_config_and_reboot_action(
     }
 
     if let Err(error) = shell(state, "reboot") {
-        return OpenClawResult::fail(
+        return ActionResult::fail(
             error.stage,
             error.code,
             error.message,
@@ -350,7 +350,7 @@ pub fn download_oled_config_and_reboot_action(
         );
     }
 
-    OpenClawResult::ok(
+    ActionResult::ok(
         local_path.clone(),
         format!("OLED config downloaded and reboot triggered: {}", local_path),
     )
@@ -359,9 +359,9 @@ pub fn download_oled_config_and_reboot_action(
 pub fn display_remote_image_action(
     remote_image_path: &str,
     state: &tauri::State<Mutex<ConnectionState>>,
-) -> OpenClawResult<()> {
+) -> ActionResult<()> {
     if remote_image_path.trim().is_empty() {
-        return OpenClawResult::fail(
+        return ActionResult::fail(
             "input_validation",
             "REMOTE_IMAGE_PATH_EMPTY",
             "远程图片路径不能为空",
@@ -372,8 +372,8 @@ pub fn display_remote_image_action(
     if remote_image_path.to_ascii_lowercase().ends_with(".bmp") {
         let command = format!("./vismm/fbshow/fbShowBmp {}", shell_quote(remote_image_path));
         return match shell(state, &command) {
-            Ok(_) => OpenClawResult::ok((), format!("remote BMP displayed: {}", remote_image_path)),
-            Err(error) => OpenClawResult::fail(
+            Ok(_) => ActionResult::ok((), format!("remote BMP displayed: {}", remote_image_path)),
+            Err(error) => ActionResult::fail(
                 error.stage,
                 error.code,
                 error.message,
@@ -388,8 +388,8 @@ pub fn display_remote_image_action(
         "/data/local/tmp/fb_image_display.py",
         &[remote_image_path],
     ) {
-        Ok(_) => OpenClawResult::ok((), format!("remote image displayed: {}", remote_image_path)),
-        Err(error) => OpenClawResult::fail(
+        Ok(_) => ActionResult::ok((), format!("remote image displayed: {}", remote_image_path)),
+        Err(error) => ActionResult::fail(
             error.stage,
             error.code,
             error.message,
@@ -401,9 +401,9 @@ pub fn display_remote_image_action(
 pub fn display_local_image_action(
     request: &ImageDisplayRequest,
     state: &tauri::State<Mutex<ConnectionState>>,
-) -> OpenClawResult<()> {
+) -> ActionResult<()> {
     if request.image_path.trim().is_empty() {
-        return OpenClawResult::fail(
+        return ActionResult::fail(
             "input_validation",
             "IMAGE_PATH_EMPTY",
             "图片路径不能为空",
@@ -412,7 +412,7 @@ pub fn display_local_image_action(
     }
 
     if !Path::new(&request.image_path).exists() {
-        return OpenClawResult::fail(
+        return ActionResult::fail(
             "input_validation",
             "IMAGE_NOT_FOUND",
             format!("图片不存在: {}", request.image_path),
@@ -454,11 +454,11 @@ pub fn display_local_image_action(
         ensure_dir(state, "/data/local/tmp/big8k_images")
     };
     if let Err(error) = ensure_result {
-        return OpenClawResult::fail(error.stage, error.code, error.message, "remote image directory prepare failed");
+        return ActionResult::fail(error.stage, error.code, error.message, "remote image directory prepare failed");
     }
 
     if let Err(error) = push(state, &request.image_path, &remote_image) {
-        return OpenClawResult::fail(error.stage, error.code, error.message, "local image upload failed");
+        return ActionResult::fail(error.stage, error.code, error.message, "local image upload failed");
     }
 
     let mut result = display_remote_image_action(&remote_image, state);
@@ -474,9 +474,9 @@ pub fn display_local_image_action(
 
 pub fn sync_runtime_patterns_action(
     state: &tauri::State<Mutex<ConnectionState>>,
-) -> OpenClawResult<()> {
+) -> ActionResult<()> {
     if let Err(error) = ensure_dir(state, "/vismm/fbshow/big8k_runtime") {
-        return OpenClawResult::fail(error.stage, error.code, error.message, "runtime pattern directory prepare failed");
+        return ActionResult::fail(error.stage, error.code, error.message, "runtime pattern directory prepare failed");
     }
 
     if let Err(error) = push(
@@ -484,19 +484,19 @@ pub fn sync_runtime_patterns_action(
         &project_file("python/runtime_fbshow/render_patterns.py"),
         "/vismm/fbshow/big8k_runtime/render_patterns.py",
     ) {
-        return OpenClawResult::fail(error.stage, error.code, error.message, "runtime pattern sync failed");
+        return ActionResult::fail(error.stage, error.code, error.message, "runtime pattern sync failed");
     }
 
     let _ = shell(state, "chmod 755 /vismm/fbshow/big8k_runtime/render_patterns.py");
-    OpenClawResult::ok((), "runtime patterns synchronized")
+    ActionResult::ok((), "runtime patterns synchronized")
 }
 
 pub fn display_runtime_pattern_action(
     request: &RuntimePatternRequest,
     state: &tauri::State<Mutex<ConnectionState>>,
-) -> OpenClawResult<()> {
+) -> ActionResult<()> {
     if request.pattern.trim().is_empty() {
-        return OpenClawResult::fail(
+        return ActionResult::fail(
             "input_validation",
             "PATTERN_EMPTY",
             "pattern 不能为空",
@@ -518,17 +518,17 @@ pub fn display_runtime_pattern_action(
                 || lowered.contains("traceback");
 
             if has_error {
-                OpenClawResult::fail(
+                ActionResult::fail(
                     "runtime_script",
                     "RUNTIME_PATTERN_FAILED",
                     output,
                     "runtime pattern display failed",
                 )
             } else {
-                OpenClawResult::ok((), format!("runtime pattern displayed: {}", request.pattern))
+                ActionResult::ok((), format!("runtime pattern displayed: {}", request.pattern))
             }
         }
-        Err(error) => OpenClawResult::fail(
+        Err(error) => ActionResult::fail(
             error.stage,
             error.code,
             error.message,
@@ -540,10 +540,10 @@ pub fn display_runtime_pattern_action(
 pub fn play_video_action(
     request: &PlayVideoRequest,
     state: &tauri::State<Mutex<ConnectionState>>,
-) -> OpenClawResult<String> {
+) -> ActionResult<String> {
     let input_path = request.video_path.trim();
     if input_path.is_empty() {
-        return OpenClawResult::fail(
+        return ActionResult::fail(
             "input_validation",
             "VIDEO_PATH_EMPTY",
             "视频路径不能为空",
@@ -559,7 +559,7 @@ pub fn play_video_action(
     {
         Some(name) => name,
         None => {
-            return OpenClawResult::fail(
+            return ActionResult::fail(
                 "input_validation",
                 "VIDEO_FILE_NAME_INVALID",
                 "视频文件名无效",
@@ -570,11 +570,11 @@ pub fn play_video_action(
 
     let remote_video_path = format!("/vismm/fbshow/movie_online/{}", file_name);
     match run_video_nowait(state, &remote_video_path, request.zoom_mode, request.show_framerate) {
-        Ok(()) => OpenClawResult::ok(
+        Ok(()) => ActionResult::ok(
             remote_video_path.clone(),
             format!("video playback started: {}", remote_video_path),
         ),
-        Err(error) => OpenClawResult::fail(
+        Err(error) => ActionResult::fail(
             error.stage,
             error.code,
             error.message,
@@ -585,14 +585,14 @@ pub fn play_video_action(
 
 pub fn get_video_playback_status_action(
     state: &tauri::State<Mutex<ConnectionState>>,
-) -> OpenClawResult<VideoPlaybackStatus> {
+) -> ActionResult<VideoPlaybackStatus> {
     match shell(
         state,
         r#"if [ -f /dev/shm/is_running ]; then echo running; else echo stopped; fi"#,
     ) {
         Ok(output) => {
             let is_running = output.lines().any(|line| line.trim() == "running");
-            OpenClawResult::ok(
+            ActionResult::ok(
                 VideoPlaybackStatus {
                     success: true,
                     is_running,
@@ -606,7 +606,7 @@ pub fn get_video_playback_status_action(
                 },
             )
         }
-        Err(error) => OpenClawResult::fail(
+        Err(error) => ActionResult::fail(
             error.stage,
             error.code,
             error.message,
@@ -618,13 +618,13 @@ pub fn get_video_playback_status_action(
 pub fn video_control_action(
     request: &VideoControlRequest,
     state: &tauri::State<Mutex<ConnectionState>>,
-) -> OpenClawResult<()> {
+) -> ActionResult<()> {
     let command = match request.action.as_str() {
         "pause" => r#"echo > /dev/shm/pause_signal"#,
         "resume" => r#"echo > /dev/shm/pause_signal"#,
         "stop" => r#"echo > /dev/shm/stop_signal"#,
         other => {
-            return OpenClawResult::fail(
+            return ActionResult::fail(
                 "input_validation",
                 "VIDEO_CONTROL_UNSUPPORTED",
                 format!("不支持的视频控制动作: {}", other),
@@ -634,8 +634,8 @@ pub fn video_control_action(
     };
 
     match shell(state, command) {
-        Ok(_) => OpenClawResult::ok((), format!("video control sent: {}", request.action)),
-        Err(error) => OpenClawResult::fail(
+        Ok(_) => ActionResult::ok((), format!("video control sent: {}", request.action)),
+        Err(error) => ActionResult::fail(
             error.stage,
             error.code,
             error.message,

@@ -7,9 +7,9 @@ mod host_env;
 mod network_commands;
 mod mipi_commands;
 mod oled_config;
-mod openclaw_actions;
-mod openclaw_adapter;
-mod openclaw_types;
+mod display_actions;
+mod remote_runtime;
+mod action_result;
 mod preset_commands;
 
 mod resources;
