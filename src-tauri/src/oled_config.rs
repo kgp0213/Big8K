@@ -378,7 +378,7 @@ pub fn export_oled_config_json(payload: ExportOledConfigJsonRequest) -> GenericR
 #[tauri::command]
 pub fn download_oled_config_and_reboot(
     payload: DownloadOledConfigRequest,
-    state: tauri::State<std::sync::Mutex<crate::ConnectionState>>,
+    state: tauri::State<std::sync::Mutex<crate::state::ConnectionState>>,
 ) -> GenericResult {
     let result = download_oled_config_and_reboot_action(&payload.request, &state);
     let local_path = if result.success {

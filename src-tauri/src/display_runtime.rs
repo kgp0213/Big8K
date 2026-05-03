@@ -1,10 +1,10 @@
 use base64::Engine;
 use std::sync::Mutex;
 
+use crate::state::ConnectionState;
 use crate::{
-    ConnectionState, GenericResult, ImageDisplayFromBase64Request, ImageDisplayRequest,
-    PatternResult, PlayVideoRequest, RuntimePatternRequest, VideoControlRequest,
-    VideoPlaybackStatus,
+    GenericResult, ImageDisplayFromBase64Request, ImageDisplayRequest, PatternResult,
+    PlayVideoRequest, RuntimePatternRequest, VideoControlRequest, VideoPlaybackStatus,
 };
 use crate::openclaw_actions::{
     display_local_image_action, display_remote_image_action, display_runtime_pattern_action,

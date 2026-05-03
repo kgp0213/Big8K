@@ -478,10 +478,11 @@ export default function FramebufferTab() {
       return;
     }
 
-    appendLog(`设置开机运行: ${selectedFileInput}`, "info");
+    const scriptPath = `${remotePath}${selectedFileInput}`;
+    appendLog(`设置开机运行: ${scriptPath}`, "info");
     try {
       const result = await tauriInvoke<{ success: boolean; error?: string }>("set_script_autorun", {
-        request: { script_name: selectedFileInput }
+        request: { script_path: scriptPath }
       });
 
       if (result.success) {

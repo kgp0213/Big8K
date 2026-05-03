@@ -1,9 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::resources::project_file;
+use crate::state::ConnectionState;
 use crate::{
-    shell_quote, ConnectionState, ImageDisplayRequest, PlayVideoRequest, RuntimePatternRequest,
-    TimingBinRequest, VideoControlRequest, VideoPlaybackStatus,
+    shell_quote, ImageDisplayRequest, PlayVideoRequest, RuntimePatternRequest, TimingBinRequest,
+    VideoControlRequest, VideoPlaybackStatus,
 };
 use crate::openclaw_adapter::{ensure_dir, push, run_project_python, run_video_nowait, shell};
 use crate::openclaw_types::OpenClawResult;
@@ -479,7 +481,7 @@ pub fn sync_runtime_patterns_action(
 
     if let Err(error) = push(
         state,
-        &crate::project_file("python/runtime_fbshow/render_patterns.py"),
+        &project_file("python/runtime_fbshow/render_patterns.py"),
         "/vismm/fbshow/big8k_runtime/render_patterns.py",
     ) {
         return OpenClawResult::fail(error.stage, error.code, error.message, "runtime pattern sync failed");

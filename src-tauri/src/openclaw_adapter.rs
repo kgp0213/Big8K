@@ -1,8 +1,9 @@
 use std::sync::Mutex;
 
+use crate::resources::project_file;
 use crate::{
-    adb_push_internal, adb_shell_internal, project_file, resolve_device_id, run_adb_nowait,
-    shell_quote, ConnectionState,
+    adb_push_internal, adb_shell_internal, resolve_device_id, run_adb_nowait, shell_quote,
+    ConnectionState,
 };
 use crate::openclaw_types::OpenClawError;
 
