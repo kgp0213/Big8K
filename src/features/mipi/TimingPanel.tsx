@@ -35,6 +35,23 @@ export default function TimingPanel({
   onToggleBasicSection,
   onUpdateTiming,
 }: Props) {
+  const parameterField = (label: string, key: keyof TimingConfig, type: "number" | "text" = "number") => (
+    <div className="min-w-0">
+      <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+        {label}
+      </label>
+      <input
+        type={type}
+        value={String(timing[key])}
+        onChange={(e) => {
+          const value = type === "number" ? Number(e.target.value) : e.target.value;
+          onUpdateTiming(key, value as TimingConfig[typeof key]);
+        }}
+        className="h-10 w-full rounded-xl border border-transparent bg-gray-100 px-3 text-sm font-semibold text-gray-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100 dark:bg-gray-800 dark:text-gray-100 dark:focus:border-blue-700 dark:focus:bg-gray-900 dark:focus:ring-blue-900/40"
+      />
+    </div>
+  );
+
   const timingField = (label: string, key: keyof TimingConfig, type: "number" | "text" = "number") => (
     <div>
       <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">{label}</label>
@@ -61,7 +78,7 @@ export default function TimingPanel({
     <>
       <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-3 space-y-3 bg-white/80 dark:bg-gray-900/20 shadow-sm">
         <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-700 pb-2">
-          <div className="font-semibold text-sm text-gray-800 dark:text-gray-100">基础参数</div>
+          <div className="font-semibold text-sm text-gray-800 dark:text-gray-100">显示面板参数配置</div>
           <div className="flex items-center gap-2">
             <button
               onClick={onToggleBasicSection}
@@ -74,25 +91,30 @@ export default function TimingPanel({
         </div>
         {showBasicSection && (
           <>
-            <div className="grid grid-cols-4 gap-3">
-              {timingField("HACT", "hact")}
-              {timingField("HFP", "hfp")}
-              {timingField("HBP", "hbp")}
-              {timingField("HSW", "hsync")}
-            </div>
-            <div className="grid grid-cols-4 gap-3">
-              {timingField("VACT", "vact")}
-              {timingField("VFP", "vfp")}
-              {timingField("VBP", "vbp")}
-              {timingField("VSW", "vsync")}
-            </div>
-            <div className="grid grid-cols-6 gap-3">
-              {timingField("PCLK (kHz)", "pclk")}
-              {timingField("Lanes", "lanes")}
-              {timingField("Format", "format", "text")}
-              {timingField("PHY Mode", "phyMode", "text")}
-              <div />
-              <div />
+            <div className="grid gap-4 xl:grid-cols-[minmax(280px,0.78fr)_minmax(560px,1.22fr)]">
+              <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900/70">
+                <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">基础参数</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                  {parameterField("PCLK (kHz)", "pclk")}
+                  {parameterField("Lanes", "lanes")}
+                  {parameterField("Format", "format", "text")}
+                  {parameterField("PHY Mode", "phyMode", "text")}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900/70">
+                <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">时序参数</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4">
+                  {parameterField("HACT", "hact")}
+                  {parameterField("HFP", "hfp")}
+                  {parameterField("HBP", "hbp")}
+                  {parameterField("HSW", "hsync")}
+                  {parameterField("VACT", "vact")}
+                  {parameterField("VFP", "vfp")}
+                  {parameterField("VBP", "vbp")}
+                  {parameterField("VSW", "vsync")}
+                </div>
+              </section>
             </div>
 
             <div className="grid grid-cols-2 gap-3">

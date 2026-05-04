@@ -56,7 +56,7 @@ export default function MipiTab() {
   const [rightEditorDraft, setRightEditorDraft] = useState(() => loadMipiRightEditor());
   const [driverCodeText, setDriverCodeText] = useState(DEFAULT_DRIVER_CODE.join("\n"));
   const [timing, setTiming] = useState<TimingConfig>(defaultTiming);
-  const [showBasicSection, setShowBasicSection] = useState(false);
+  const [showBasicSection, setShowBasicSection] = useState(true);
   const [selectedLogicPattern, setSelectedLogicPattern] = useState(0);
   const [recentConfigs, setRecentConfigs] = useState<RecentLcdConfigItem[]>([]);
   const [showRecentConfigs, setShowRecentConfigs] = useState(false);
